@@ -1,6 +1,18 @@
+<p align="center">
+  <img src="Banner.jpg" width="100%" />
+</p>
+
 # Dolphy-App-Improved
 
 Android multi-tool for wireless protocol research: NFC, BLE, IR, Wi-Fi, HID. No root required.
+
+## Screenshots
+
+<p align="center">
+  <img src="Screenshot1.jpg" width="220" />
+  <img src="Screenshot2.jpg" width="220" />
+  <img src="Screenshot3.jpg" width="220" />
+</p>
 
 ## Fixes in this fork
 
@@ -23,10 +35,6 @@ Android multi-tool for wireless protocol research: NFC, BLE, IR, Wi-Fi, HID. No 
 - **NFC auto-read toggle** — turn off automatic NFC tag reading (useful if you keep a card in your phone case)
 - **OLED background toggle** — pure black background for AMOLED screens (saves battery)
 
-## Based on
-
-[unvoiddd/Dolphy-App](https://github.com/unvoiddd/Dolphy-App)
-
 ## Install
 
 1. Download the APK from [Releases](../../releases).
@@ -38,6 +46,3 @@ Android multi-tool for wireless protocol research: NFC, BLE, IR, Wi-Fi, HID. No 
 - Android 10+ (minSdk 26)
 - Some modules require root, IR blaster, or BLE/NFC hardware
 
-## License
-
-For legal pentesting only. MIT License.![Uploading Screenshot_20260929_160635_FlipaClip.jpg…]()
