@@ -1,4 +1,6 @@
-
+<p align="center">
+  <img src="Banner.jpg" width="100%" />
+</p>
 
 # Dolphy-App-Improved
 
@@ -33,14 +35,10 @@ Android multi-tool for wireless protocol research: NFC, BLE, IR, Wi-Fi, HID. No 
 - **NFC auto-read toggle** — turn off automatic NFC tag reading (useful if you keep a card in your phone case)
 - **OLED background toggle** — pure black background for AMOLED screens (saves battery)
 
-## Install
-
-1. Download the APK from [Releases](../../releases).
-2. Enable "Install from unknown sources" in Android settings.
-3. Open the APK and install.
+## Something important:
+unvoiddd cool dude
 
 ## Requirements
 
 - Android 10+ (minSdk 26)
 - Some modules require root, IR blaster, or BLE/NFC hardware
-
