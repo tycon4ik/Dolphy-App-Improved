@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="Banner.jpg" width="100%" />
-</p>
+
 
 # Dolphy-App-Improved
 
