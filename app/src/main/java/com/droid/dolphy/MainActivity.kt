@@ -55,6 +55,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
@@ -66,6 +69,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.imageResource
+import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -225,6 +231,7 @@ fun DolphyTheme(
     uiScale: Float = 1f,
     animatedBackgroundEnabled: Boolean = false,
     expressiveEnabled: Boolean = false,
+    oledMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
@@ -252,8 +259,23 @@ fun DolphyTheme(
         LocalAnimatedBackgroundEnabled provides animatedBackgroundEnabled,
         LocalDensity provides scaledDensity,
     ) {
+        val finalColorScheme = if (oledMode && darkTheme) {
+            expressiveScheme.copy(
+                background = Color.Black,
+                surface = Color.Black,
+                surfaceVariant = Color(0xFF0A0A0A),
+                surfaceContainer = Color(0xFF050505),
+                surfaceContainerHigh = Color(0xFF0A0A0A),
+                surfaceContainerHighest = Color(0xFF101010),
+                surfaceContainerLow = Color(0xFF020202),
+                surfaceContainerLowest = Color.Black,
+                surfaceDim = Color.Black,
+                surfaceBright = Color(0xFF1A1A1A),
+            )
+        } else expressiveScheme
+
         MaterialExpressiveTheme(
-            colorScheme = expressiveScheme,
+            colorScheme = finalColorScheme,
             typography = typography,
             motionScheme = MotionScheme.expressive(),
             content = content
@@ -585,6 +607,8 @@ class MainActivity : ComponentActivity() {
             val animatedBackgroundEnabled by spamViewModel.animatedBackgroundEnabled.collectAsState()
             val expressiveEnabled by spamViewModel.expressiveEnabled.collectAsState()
             val uiScale by spamViewModel.uiScale.collectAsState()
+            val oledMode by spamViewModel.oledMode.collectAsState()
+    val nfcAutoReadEnabled by nfcViewModel.nfcAutoReadEnabled.collectAsState()
 
             DolphyTheme(
                 darkTheme = isDarkTheme,
@@ -595,7 +619,7 @@ class MainActivity : ComponentActivity() {
                 uiScale = uiScale,
                 animatedBackgroundEnabled = animatedBackgroundEnabled,
                 expressiveEnabled = expressiveEnabled
-            ) {
+            , oledMode = oledMode) {
                 val backgroundColor = MaterialTheme.colorScheme.background
 
                 SideEffect {
@@ -841,6 +865,12 @@ fun MainScaffold(
         "other/ir_storm",
         "ir_jammer",
         "other/ir_jammer",
+        "plugin_manager",
+        "plugin_security",
+        "plugin_about",
+        "plugin_preview",
+        "plugin_install_helper",
+        "plugin_host",
     )
 
     fun navigateToSectionRoot(route: String) {
@@ -958,7 +988,9 @@ fun MainScaffold(
             }
             composable(
                 "settings"
-            ) { SettingsScreen(spamViewModel, dolphyViewModel, screenNavController) }
+            ) { SettingsScreen(spamViewModel, dolphyViewModel, nfcViewModel, screenNavController) }
+            composable("root_tools") { RootToolsScreen(screenNavController) }
+            composable("other/root_tools") { RootToolsScreen(screenNavController) }
             composable(
                 "other"
             ) { OtherScreen(screenNavController, spamViewModel) }
@@ -1641,44 +1673,7 @@ fun BluetoothContainerScreen(viewModel: SpamViewModel, navController: NavControl
     var tabIndex by remember { mutableIntStateOf(savedTabIndex) }
     val tabs = listOf("All", "BLE", "Advert")
     val tabRoutes = listOf("all", "ble", "advert")
-    var showBluetoothDialog by remember { mutableStateOf(false) }
     val accentColor = MaterialTheme.colorScheme.primary
-
-    if (showBluetoothDialog) {
-        ExpressiveDialog(
-            onDismissRequest = { showBluetoothDialog = false },
-            title = { Text(stringResource(R.string.bluetooth_disabled)) },
-            text = {
-                Text(
-                    stringResource(R.string.bluetooth_disabled_message),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                AccentButton(onClick = {
-                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
-                    context.startActivity(intent)
-                    showBluetoothDialog = false
-                }) {
-                    Text(stringResource(R.string.bluetooth_enable))
-                }
-            },
-            dismissButton = {
-                AccentButton(onClick = { showBluetoothDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-            accentColor = accentColor
-        )
-    }
-
-    val bluetoothAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-    val isBluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
-
-    if (!isBluetoothEnabled) {
-        showBluetoothDialog = true
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -2236,6 +2231,8 @@ fun AllSpamScreen(viewModel: SpamViewModel) {
 
 private var sessionExternalDolphinAnimationName: String? = null
 
+private val dolphinFrameCache = mutableMapOf<String, List<androidx.compose.ui.graphics.ImageBitmap>>()
+
 @Composable
 private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -2273,26 +2270,33 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
                 dolphyState.butthurt in it.minButthurt..it.maxButthurt
         }
     }
-    val currentAnimation = remember(validAnimations) {
-        if(validAnimations.isEmpty()) {
+    val currentAnimation = remember(validAnimations, animations) {
+        // Fallback: если для текущего уровня нет подходящих анимаций,
+        // берём любую из имеющихся, чтобы дельфин не пропадал.
+        val pool = validAnimations.ifEmpty { animations }
+        if (pool.isEmpty()) {
             null
         } else {
             val sessionName = sessionExternalDolphinAnimationName
-            val existing = validAnimations.firstOrNull { it.name == sessionName }
-            if(existing != null) {
+            val existing = pool.firstOrNull { it.name == sessionName }
+            if (existing != null) {
                 existing
             } else {
-                val picked = selectWeightedAnimation(validAnimations)
+                val picked = selectWeightedAnimation(pool)
                 sessionExternalDolphinAnimationName = picked?.name
                 picked
             }
         }
     }
     val currentFrames = remember(currentAnimation) { currentAnimation?.frames.orEmpty() }
+
+    // Пре-декодируем кадры один раз на анимацию — нет мерцания при смене кадра.
     val decodedFrames by androidx.compose.runtime.produceState(
         initialValue = emptyList<androidx.compose.ui.graphics.ImageBitmap>(),
-        key1 = currentFrames
+        key1 = currentAnimation?.name
     ) {
+        // Небольшая задержка, чтобы главный экран успел отрисоваться до тяжёлого декодирования.
+        kotlinx.coroutines.delay(500)
         value = withContext(Dispatchers.IO) {
             currentFrames.mapNotNull { framePath ->
                 runCatching {
@@ -2304,22 +2308,22 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
         }
     }
 
-    var frameIndex by remember(decodedFrames) { mutableIntStateOf(0) }
-    val frameDelayMs = remember(currentAnimation) {
+    var frameIndex by rememberSaveable { mutableIntStateOf(0) }
+    val frameDelayMs = remember(currentAnimation, cyclicAnimationEnabled) {
         val frameRate = (currentAnimation?.frameRate ?: 2).coerceAtLeast(1)
-
-        (1000L / (frameRate * 4)).coerceAtLeast(28L)
+        val base = 1000L / (frameRate * 4)
+        base.coerceAtLeast(if (cyclicAnimationEnabled) 130L else 160L)
     }
 
-    LaunchedEffect(decodedFrames, cyclicAnimationEnabled) {
+    LaunchedEffect(decodedFrames.size, cyclicAnimationEnabled) {
         if (decodedFrames.isEmpty()) return@LaunchedEffect
-        frameIndex = 0
         if (cyclicAnimationEnabled) {
-            while (decodedFrames.isNotEmpty()) {
+            while (true) {
                 delay(frameDelayMs)
                 frameIndex = (frameIndex + 1) % decodedFrames.size
             }
         } else {
+            if (frameIndex > decodedFrames.lastIndex) frameIndex = 0
             while (frameIndex < decodedFrames.lastIndex) {
                 delay(frameDelayMs)
                 frameIndex += 1
@@ -2475,14 +2479,73 @@ fun BleSpamScreen(viewModel: SpamViewModel, onSectionClick: (BleSection) -> Unit
     val accent = MaterialTheme.colorScheme.primary
     val activeColor = lerp(accent, Color.White, 0.22f)
     val context = LocalContext.current
-    val btEnableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    val btPrefs = remember(context) {
+        context.getSharedPreferences("DolphyPrefs", Context.MODE_PRIVATE)
+    }
+    var pendingBtAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var showBtDialog by remember { mutableStateOf(false) }
+    var dontAskBtAgain by remember {
+        mutableStateOf(btPrefs.getBoolean("bt_dont_ask_again", false))
+    }
+
+    val btEnableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (adapter?.isEnabled == true) {
+            // Пользователь включил BT — выполняем отложенное действие
+            pendingBtAction?.invoke()
+        } else {
+            Toast.makeText(context, "Bluetooth не включён", Toast.LENGTH_SHORT).show()
+        }
+        pendingBtAction = null
+    }
+
     val ensureBluetoothEnabled: (((() -> Unit)) -> Unit) = { action ->
         val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter?.isEnabled == true) {
             action()
+        } else if (dontAskBtAgain) {
+            Toast.makeText(context, "Для этого модуля нужен Bluetooth", Toast.LENGTH_SHORT).show()
         } else {
-            btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            pendingBtAction = action
+            showBtDialog = true
         }
+    }
+
+    if (showBtDialog) {
+        AlertDialog(
+            onDismissRequest = { showBtDialog = false; pendingBtAction = null },
+            icon = { Icon(Icons.Default.Bluetooth, contentDescription = null) },
+            title = { Text("Нужен Bluetooth") },
+            text = {
+                Column {
+                    Text("Для работы этого модуля нужно включить Bluetooth.")
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = dontAskBtAgain,
+                            onCheckedChange = { dontAskBtAgain = it }
+                        )
+                        Text("Больше не спрашивать")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    btPrefs.edit { putBoolean("bt_dont_ask_again", dontAskBtAgain) }
+                    showBtDialog = false
+                    btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                }) { Text("Включить") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    btPrefs.edit { putBoolean("bt_dont_ask_again", dontAskBtAgain) }
+                    showBtDialog = false
+                    pendingBtAction = null
+                }) { Text("Отмена") }
+            }
+        )
     }
 
     LazyColumn(
@@ -2870,7 +2933,7 @@ fun PluginSystemWarningDialog(onConfirm: () -> Unit) {
 }
 
 @Composable
-fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewModel, navController: NavController) {
+fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewModel, nfcViewModel: com.droid.dolphy.nfc.NfcViewModel, navController: NavController) {
     val bottomScrollPadding = 180.dp
     val isDarkTheme by spamViewModel.isDarkTheme.collectAsState()
     val accentColor = MaterialTheme.colorScheme.primary
@@ -2878,6 +2941,8 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
     val flipperFontEnabled by spamViewModel.flipperFontEnabled.collectAsState()
     val uiScale by spamViewModel.uiScale.collectAsState()
     val cyclicDolphinAnimationEnabled by spamViewModel.cyclicDolphinAnimationEnabled.collectAsState()
+    val oledMode by spamViewModel.oledMode.collectAsState()
+    val nfcAutoReadEnabled by nfcViewModel.nfcAutoReadEnabled.collectAsState()
     val dolphyState by dolphyViewModel.dolphyState.collectAsState()
     val context = LocalContext.current
     var showAuthDialog by remember { mutableStateOf(false) }
@@ -3110,7 +3175,55 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(2, interfaceItems),
+                        shape = getSegmentedShape(4, interfaceItems),
+                        contentPadding = 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.DarkMode, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("OLED-фон", style = MaterialTheme.typography.bodyLarge)
+                                Text("Чисто чёрный фон (экономия батареи на AMOLED)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            DolphySwitch(
+                                checked = oledMode,
+                                onCheckedChange = { spamViewModel.setOledMode(it) }
+                            )
+                        }
+                    }
+
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(0, interfaceItems),
+                        contentPadding = 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Авто-чтение NFC", style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "Выключите, если в чехле лежит карта — не будет читаться автоматически",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DolphySwitch(
+                                checked = nfcAutoReadEnabled,
+                                onCheckedChange = { nfcViewModel.setNfcAutoReadEnabled(it) }
+                            )
+                        }
+                    }
+
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(3, interfaceItems),
                         contentPadding = 0.dp
                     ) {
                         Row(
@@ -3646,14 +3759,73 @@ fun BleSectionScreen(section: BleSection, onBack: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
-    val btEnableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    val btPrefs = remember(context) {
+        context.getSharedPreferences("DolphyPrefs", Context.MODE_PRIVATE)
+    }
+    var pendingBtAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var showBtDialog by remember { mutableStateOf(false) }
+    var dontAskBtAgain by remember {
+        mutableStateOf(btPrefs.getBoolean("bt_dont_ask_again", false))
+    }
+
+    val btEnableLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (adapter?.isEnabled == true) {
+            // Пользователь включил BT — выполняем отложенное действие
+            pendingBtAction?.invoke()
+        } else {
+            Toast.makeText(context, "Bluetooth не включён", Toast.LENGTH_SHORT).show()
+        }
+        pendingBtAction = null
+    }
+
     val ensureBluetoothEnabled: (((() -> Unit)) -> Unit) = { action ->
         val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter?.isEnabled == true) {
             action()
+        } else if (dontAskBtAgain) {
+            Toast.makeText(context, "Для этого модуля нужен Bluetooth", Toast.LENGTH_SHORT).show()
         } else {
-            btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            pendingBtAction = action
+            showBtDialog = true
         }
+    }
+
+    if (showBtDialog) {
+        AlertDialog(
+            onDismissRequest = { showBtDialog = false; pendingBtAction = null },
+            icon = { Icon(Icons.Default.Bluetooth, contentDescription = null) },
+            title = { Text("Нужен Bluetooth") },
+            text = {
+                Column {
+                    Text("Для работы этого модуля нужно включить Bluetooth.")
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = dontAskBtAgain,
+                            onCheckedChange = { dontAskBtAgain = it }
+                        )
+                        Text("Больше не спрашивать")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    btPrefs.edit { putBoolean("bt_dont_ask_again", dontAskBtAgain) }
+                    showBtDialog = false
+                    btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                }) { Text("Включить") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    btPrefs.edit { putBoolean("bt_dont_ask_again", dontAskBtAgain) }
+                    showBtDialog = false
+                    pendingBtAction = null
+                }) { Text("Отмена") }
+            }
+        )
     }
 
     val groups = remember(section) { buildBleSectionModeGroups(context, section) }
@@ -4041,6 +4213,7 @@ fun ThemeModeScreen(viewModel: SpamViewModel, onNavigateBack: () -> Unit) {
                             }
                         }
                     }
+
                 }
             }
         }
@@ -4321,7 +4494,7 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = renameInput,
-                        onValueChange = { renameInput = it.replace("\n", "").take(10) },
+                        onValueChange = { renameInput = it.replace("\n", "").take(20) },
                         singleLine = true,
                         label = { Text(stringResource(R.string.passport_name_label)) },
                         shape = RoundedCornerShape(16.dp),
@@ -4418,7 +4591,24 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
                     }
                 }
 
-                Image(
+                val customUri = dolphyState.customAvatarUri
+                if (customUri != null) {
+                    coil.compose.AsyncImage(
+                        model = coil.request.ImageRequest.Builder(context)
+                            .data(java.io.File(customUri))
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "Portrait",
+                        modifier = Modifier
+                            .size(90.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .clickable {
+                                clickCount++
+                                if (clickCount >= 10) clickCount = 0
+                            },
+                        contentScale = ContentScale.Crop
+                    )
+                } else Image(
                     painter = painterResource(id = portrait),
                     contentDescription = "Portrait",
                     modifier = Modifier
@@ -4472,7 +4662,7 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.clickable {
-                            renameInput = dolphyState.dolphinName.take(10)
+                            renameInput = dolphyState.dolphinName.take(20)
                             showRenameDialog = true
                         }
                     ) {
@@ -5343,6 +5533,12 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
     val glassNavEnabled: StateFlow<Boolean> = _liquidGlassEnabled
     private val _animatedBackgroundEnabled = MutableStateFlow(prefs.getBoolean("animated_background_enabled", false))
     val animatedBackgroundEnabled: StateFlow<Boolean> = _animatedBackgroundEnabled
+    private val _oledMode = MutableStateFlow(prefs.getBoolean("oled_mode", false))
+    val oledMode: StateFlow<Boolean> = _oledMode
+    fun setOledMode(enabled: Boolean) {
+        _oledMode.value = enabled
+        prefs.edit { putBoolean("oled_mode", enabled) }
+    }
     private val _expressiveEnabled = MutableStateFlow(prefs.getBoolean("md3_expressive", false))
     val expressiveEnabled: StateFlow<Boolean> = _expressiveEnabled
     private val _appLanguage = MutableStateFlow(prefs.getString("app_language", "ru") ?: "ru")
@@ -6044,6 +6240,8 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
         stopAdvertisePreset()
     }
 }
+
+
 
 
 

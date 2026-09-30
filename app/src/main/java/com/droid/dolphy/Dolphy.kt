@@ -27,6 +27,7 @@ private const val KEY_IR_SEND_COUNT = "ir_send_count"
 private const val KEY_BAD_HID_COUNT = "bad_hid_count"
 private const val KEY_NFC_EMULATE_COUNT = "nfc_emulate_count"
 private const val KEY_DOLPHIN_NAME = "dolphin_name"
+private const val KEY_CUSTOM_AVATAR = "custom_avatar_uri"
 private const val KEY_BLE_PACKETS_SENT = "ble_packets_sent"
 private const val KEY_NRF_DEVICES_FOUND = "nrf_devices_found"
 private const val KEY_WIFI_BRUTE_SUCCESS = "wifi_brute_success"
@@ -68,6 +69,7 @@ data class DolphyState(
     val nrfDevicesFound: Int = 0,
     val wifiBruteSuccessCount: Int = 0,
     val dolphinName: String = generateDolphinName(),
+    val customAvatarUri: String? = null,
 ) {
     val level: Int
         get() = (icounter / LEVEL_THRESHOLD) + 1
@@ -172,6 +174,7 @@ object DolphyRepository {
                 nrfDevicesFound = current.nrfDevicesFound,
                 wifiBruteSuccessCount = nextWifiBrute,
                 dolphinName = current.dolphinName,
+            customAvatarUri = prefs.getString(KEY_CUSTOM_AVATAR, null),
             )
         }
     }
@@ -298,10 +301,28 @@ object DolphyRepository {
     fun setDolphinName(context: Context, value: String) {
         synchronized(lock) {
             init(context)
-            val normalized = value.trim().take(10)
+            val normalized = value.trim().take(20)
             if (normalized.isBlank()) return
             val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             prefs.edit().putString(KEY_DOLPHIN_NAME, normalized).apply()
+            _state.value = refreshAndLoad(appContext)
+        }
+    }
+
+    fun setCustomAvatar(context: Context, uriString: String) {
+        synchronized(lock) {
+            init(context)
+            val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            prefs.edit().putString(KEY_CUSTOM_AVATAR, uriString).apply()
+            _state.value = refreshAndLoad(appContext)
+        }
+    }
+
+    fun clearCustomAvatar(context: Context) {
+        synchronized(lock) {
+            init(context)
+            val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            prefs.edit().remove(KEY_CUSTOM_AVATAR).apply()
             _state.value = refreshAndLoad(appContext)
         }
     }

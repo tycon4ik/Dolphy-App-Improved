@@ -9,3 +9,6 @@
 *.keystore
 *.pk8
 *.pem
+.kotlin/
+/gradlew
+gradlew.bat

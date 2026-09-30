@@ -488,7 +488,7 @@
     <string name="passport_max_level">MAX LEVEL</string>
     <string name="passport_mood">Настроение</string>
     <string name="passport_name_label">Имя</string>
-    <string name="passport_name_limit_hint">Максимум 10 символов</string>
+    <string name="passport_name_limit_hint">Максимум 20 символов</string>
     <string name="passport_nfc_emulate">NFC эмуляций запущено</string>
     <string name="passport_nfc_read">NFC карт считано</string>
     <string name="passport_rename_title">Переименовать</string>
