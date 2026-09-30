@@ -50,10 +50,17 @@ object PluginRegistry {
     }
 
     fun addOtherCard(card: OtherCardContribution) {
+        val savedSection = prefs?.getString("${card.pluginId}:${card.screenId}:${card.title}:section", null)
+        val savedOrder = prefs?.getInt("${card.pluginId}:${card.screenId}:${card.title}:order", -1) ?: -1
+        val finalCard = if (savedSection != null) {
+            card.copy(section = savedSection, order = if (savedOrder >= 0) savedOrder else card.order)
+        } else {
+            card
+        }
         _otherCards.update { list ->
             list.filterNot {
                 it.pluginId == card.pluginId && it.screenId == card.screenId && it.title == card.title
-            } + card
+            } + finalCard
         }
         bump()
     }
@@ -96,6 +103,45 @@ object PluginRegistry {
     }
 
     fun touch() {
+        bump()
+    }
+
+    private var prefs: android.content.SharedPreferences? = null
+
+    fun init(context: android.content.Context) {
+        if (prefs == null) {
+            prefs = context.applicationContext.getSharedPreferences("plugin_card_placements", android.content.Context.MODE_PRIVATE)
+        }
+    }
+
+    fun moveOtherCard(
+        pluginId: String,
+        screenId: String,
+        title: String,
+        targetSection: String,
+        newIndex: Int = -1,
+        context: android.content.Context? = null
+    ) {
+        if (context != null) init(context)
+        _otherCards.update { list ->
+            val card = list.firstOrNull { it.pluginId == pluginId && it.screenId == screenId && it.title == title }
+                ?: return@update list
+            val updated = card.copy(section = targetSection)
+            val withoutCard = list.filterNot { it.pluginId == pluginId && it.screenId == screenId && it.title == title }
+            val inTarget = withoutCard.filter { it.section == targetSection }.toMutableList()
+            val outsideTarget = withoutCard.filter { it.section != targetSection }
+            val insertAt = if (newIndex in 0..inTarget.size) newIndex else inTarget.size
+            inTarget.add(insertAt, updated)
+            val reordered = inTarget.mapIndexed { idx, c -> c.copy(order = idx) }
+            
+            prefs?.edit()?.let { editor ->
+                editor.putString("${pluginId}:${screenId}:${title}:section", targetSection)
+                editor.putInt("${pluginId}:${screenId}:${title}:order", insertAt)
+                editor.apply()
+            }
+            
+            outsideTarget + reordered
+        }
         bump()
     }
 

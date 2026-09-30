@@ -494,8 +494,17 @@ object PluginManager {
         PluginLibraryRegistry.clearAll()
         PluginDexRegistry.clearAll()
 
+        runCatching {
+            File(sourcesDir, "usb_c_ir_backend.dolphyplugin").delete()
+            File(metaDir, "usb_c_ir_backend.json").delete()
+        }
+
         val sourceFiles = sourcesDir.listFiles()
-            ?.filter { it.isFile && (it.extension.equals("js", true) || it.extension.equals("plugin", true) || it.extension.equals("dolphyplugin", true)) }
+            ?.filter {
+                it.isFile &&
+                !it.nameWithoutExtension.equals("usb_c_ir_backend", true) &&
+                (it.extension.equals("js", true) || it.extension.equals("plugin", true) || it.extension.equals("dolphyplugin", true))
+            }
             .orEmpty()
 
         val pending = mutableListOf<PendingPlugin>()

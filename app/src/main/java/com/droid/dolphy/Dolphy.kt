@@ -298,7 +298,7 @@ object DolphyRepository {
     fun setDolphinName(context: Context, value: String) {
         synchronized(lock) {
             init(context)
-            val normalized = value.trim().take(10)
+            val normalized = value.trim().take(25)
             if (normalized.isBlank()) return
             val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             prefs.edit().putString(KEY_DOLPHIN_NAME, normalized).apply()

@@ -1,4 +1,4 @@
-﻿import java.net.URI
+import java.net.URI
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -21,8 +21,8 @@ android {
         applicationId = "com.droid.dolphy"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "2.5"
+        versionCode = 26
+        versionName = "2.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -49,6 +49,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             isProfileable = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -77,6 +78,8 @@ android {
         compose = true
         buildConfig = true
     }
+
+
 
     packaging {
         resources {
@@ -140,6 +143,7 @@ dependencies {
     implementation("com.hp.jipp:jipp-core:0.7.18")
     implementation("com.hp.jipp:jipp-pdl:0.7.18")
     implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

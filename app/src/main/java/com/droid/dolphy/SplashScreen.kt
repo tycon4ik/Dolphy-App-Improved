@@ -50,6 +50,12 @@ import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+
 @Composable
 fun SplashScreen(
     onSplashComplete: () -> Unit
@@ -63,7 +69,7 @@ fun SplashScreen(
 }
 
 private data class MatrixGlyph(
-    val icon: ImageVector,
+    val iconIndex: Int,
     val xFraction: Float,
     val startFraction: Float,
     val speed: Float,
@@ -99,7 +105,7 @@ fun MatrixIconField(
     alphaVariance: Float = 0.48f
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "matrix_icons")
-    val progress by infiniteTransition.animateFloat(
+    val progressState = infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -109,12 +115,14 @@ fun MatrixIconField(
         label = "matrix_progress"
     )
 
+    val painters = matrixGlyphIcons.map { rememberVectorPainter(it) }
+
     val glyphs = remember(glyphCount, columns, minSizeDp, sizeVarianceDp, minAlpha, alphaVariance) {
         val random = Random(42)
         List(glyphCount) { index ->
             val column = index % columns
             MatrixGlyph(
-                icon = matrixGlyphIcons[random.nextInt(matrixGlyphIcons.size)],
+                iconIndex = random.nextInt(matrixGlyphIcons.size),
                 xFraction = ((column + 0.5f) / columns.toFloat()) + random.nextFloat() * 0.035f - 0.0175f,
                 startFraction = random.nextFloat() * 1.35f,
                 speed = 0.26f + random.nextFloat() * 0.52f,
@@ -124,26 +132,30 @@ fun MatrixIconField(
         }
     }
 
-    BoxWithConstraints(modifier = modifier) {
-        val density = LocalDensity.current
-        val widthPx = with(density) { maxWidth.toPx() }
-        val heightPx = with(density) { maxHeight.toPx() }
+    Canvas(modifier = modifier) {
+        val progress = progressState.value
+        val widthPx = size.width
+        val heightPx = size.height
+        if (widthPx <= 0f || heightPx <= 0f) return@Canvas
 
-        glyphs.forEach { glyph ->
-            val x = (widthPx * glyph.xFraction).roundToInt()
+        val glyphsCount = glyphs.size
+        for (i in 0 until glyphsCount) {
+            val glyph = glyphs[i]
+            val x = widthPx * glyph.xFraction
             val yProgress = (glyph.startFraction + progress * glyph.speed) % 1.35f
-            val y = (heightPx * yProgress - heightPx * 0.15f).roundToInt()
-            val tint = accentColor.copy(alpha = glyph.alpha)
+            val y = heightPx * yProgress - heightPx * 0.15f
+            val sizePx = glyph.sizeDp.dp.toPx()
+            val painter = painters[glyph.iconIndex]
 
-            Icon(
-                imageVector = glyph.icon,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier
-                    .size(glyph.sizeDp.dp)
-                    .offset { IntOffset(x, y) }
-                    .align(Alignment.TopStart)
-            )
+            translate(left = x, top = y) {
+                with(painter) {
+                    draw(
+                        size = Size(sizePx, sizePx),
+                        alpha = glyph.alpha,
+                        colorFilter = ColorFilter.tint(accentColor)
+                    )
+                }
+            }
         }
     }
 }

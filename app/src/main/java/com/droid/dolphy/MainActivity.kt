@@ -96,6 +96,7 @@ import com.droid.dolphy.network.CameraNetworkResultsScreen
 import com.droid.dolphy.network.CameraNetworkScanScreen
 import com.droid.dolphy.network.LanScannerScreen
 import com.droid.dolphy.network.LanToolsScreen
+import com.droid.dolphy.network.MyCamScreen
 import com.droid.dolphy.network.NetworkDiagnosticHubScreen
 import com.droid.dolphy.nfc.NfcViewModel
 import com.droid.dolphy.nfc.NfcViewModelFactory
@@ -140,7 +141,7 @@ import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import kotlin.random.Random
 enum class SpamType {
-    CONTINUITY, EASY_SETUP, FAST_PAIR, SWIFT_PAIR, XIAOMI, PHANTOM
+    CONTINUITY, EASY_SETUP, FAST_PAIR, SWIFT_PAIR, XIAOMI, VIVO, PHANTOM
 }
 
 data class ContinuityMode(
@@ -153,6 +154,7 @@ enum class BleSection(val title: String, val route: String) {
     ANDROID("Android", "android"),
     SAMSUNG("Samsung", "samsung"),
     XIAOMI("Xiaomi", "xiaomi"),
+    VIVO("Vivo", "vivo"),
     WINDOWS("Windows", "windows"),
     PHANTOM("Phantom", "phantom")
 }
@@ -545,6 +547,8 @@ class MainActivity : ComponentActivity() {
         }
 
         DolphyRepository.initializeNewUser(applicationContext)
+        spamViewModel.maybeAutoEnablePerformanceMode()
+        UsbIrManager.init(this)
 
         val openedPluginUri = pluginUriFromIntent(intent)
         if (openedPluginUri == null) requestPermissions()
@@ -585,6 +589,7 @@ class MainActivity : ComponentActivity() {
             val animatedBackgroundEnabled by spamViewModel.animatedBackgroundEnabled.collectAsState()
             val expressiveEnabled by spamViewModel.expressiveEnabled.collectAsState()
             val uiScale by spamViewModel.uiScale.collectAsState()
+            val performanceModeEnabled by spamViewModel.performanceModeEnabled.collectAsState()
 
             DolphyTheme(
                 darkTheme = isDarkTheme,
@@ -593,8 +598,8 @@ class MainActivity : ComponentActivity() {
                 useFlipperFont = flipperFontEnabled,
                 flipperFontScale = flipperFontScale,
                 uiScale = uiScale,
-                animatedBackgroundEnabled = animatedBackgroundEnabled,
-                expressiveEnabled = expressiveEnabled
+                animatedBackgroundEnabled = animatedBackgroundEnabled && !performanceModeEnabled,
+                expressiveEnabled = expressiveEnabled && !performanceModeEnabled
             ) {
                 val backgroundColor = MaterialTheme.colorScheme.background
 
@@ -619,6 +624,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        UsbIrManager.scanDevices()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -793,12 +803,14 @@ fun MainScaffold(
     val isDarkTheme by spamViewModel.isDarkTheme.collectAsState()
     val accentColor = MaterialTheme.colorScheme.primary
     val animatedBackgroundEnabled by spamViewModel.animatedBackgroundEnabled.collectAsState()
+    val performanceModeEnabled by spamViewModel.performanceModeEnabled.collectAsState()
     val expressiveEnabled by spamViewModel.expressiveEnabled.collectAsState()
     val liquidGlassEnabled = false
     val liquidGlassButtons = false
     val liquidGlassTopBars = false
     val liquidGlassNav = false
     val fabDestinationRoute by spamViewModel.fabDestinationRoute.collectAsState()
+    val fabEnabled by spamViewModel.fabEnabled.collectAsState()
     val functionDestinations = functionDestinationSections().flatMap { it.second }
     val fabDestination = functionDestinations.firstOrNull { it.route == fabDestinationRoute }
 
@@ -823,6 +835,7 @@ fun MainScaffold(
     val currentRoute = currentDestination?.route.orEmpty()
     val visibleRoute = currentRoute.ifEmpty { "bluetooth" }
     val sectionTopBarScrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val appStyleMode by spamViewModel.appStyleMode.collectAsState()
 
     LaunchedEffect(visibleRoute) {
         sectionTopBarScrollBehavior.state.heightOffset = 0f
@@ -841,10 +854,18 @@ fun MainScaffold(
         "other/ir_storm",
         "ir_jammer",
         "other/ir_jammer",
-    )
+        "plugin_manager",
+        "other/plugin_manager",
+        "plugin_security",
+        "other/plugin_security",
+        "plugin_about",
+        "other/plugin_about",
+        "customize_animations",
+    ) && !visibleRoute.startsWith("ble_section/") && !visibleRoute.startsWith("plugin_")
 
     fun navigateToSectionRoot(route: String) {
         if (currentRoute == route) return
+        vibrate(context)
         screenNavController.navigate(route) {
             popUpTo(screenNavController.graph.startDestinationId) {
                 saveState = true
@@ -866,26 +887,19 @@ fun MainScaffold(
         LocalLiquidGlassNav provides liquidGlassNav,
         LocalLiquidGlassBackdrop provides controlsBackdrop,
         LocalLiquidGlassContentBackdrop provides null,
-        LocalSectionTopBarScrollBehavior provides sectionTopBarScrollBehavior,
+        LocalSectionTopBarScrollBehavior provides null,
     ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .then(
-                if (usesCollapsingTopBar) {
-                    Modifier.nestedScroll(sectionTopBarScrollBehavior.nestedScrollConnection)
-                } else {
-                    Modifier
-                }
-            )
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         ) {
-        if (animatedBackgroundEnabled) {
+        if (animatedBackgroundEnabled && !performanceModeEnabled) {
             MatrixIconField(
                 modifier = Modifier
                     .matchParentSize()
@@ -906,26 +920,18 @@ fun MainScaffold(
         }
 
         val density = LocalDensity.current
-        val topBlurHeight = with(density) {
-            WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx() * 1.15f
-        }
-        val bottomBlurHeight = with(density) { 150.dp.toPx() }
+        val bottomBlurHeight = with(density) { 105.dp.toPx() }
 
+        ProgressiveBlurContent(
+            modifier = Modifier.fillMaxSize(),
+            topHeightPx = 0f,
+            bottomHeightPx = if (performanceModeEnabled) 0f else bottomBlurHeight,
+            blurRadius = 18f
+        ) {
         NavHost(
             navController = screenNavController,
-            startDestination = "bluetooth",
-            modifier = Modifier
-                .fillMaxSize()
-                .progressiveBlur(
-                    blurRadius = 40f,
-                    height = topBlurHeight,
-                    direction = BlurDirection.TOP
-                )
-                .progressiveBlur(
-                    blurRadius = 40f,
-                    height = bottomBlurHeight,
-                    direction = BlurDirection.BOTTOM
-                ),
+            startDestination = if (appStyleMode == 1) "other" else "bluetooth",
+            modifier = Modifier.fillMaxSize(),
             enterTransition = {
                 rootSectionEnterTransition(
                     initialRoute = initialState.destination.route.orEmpty(),
@@ -980,6 +986,22 @@ fun MainScaffold(
                     accentColor = accent
                 )
             }
+            composable("ble_spam_screen") {
+                BleSpamFullScreen(
+                    viewModel = spamViewModel,
+                    navController = screenNavController,
+                    onBack = { screenNavController.popBackStack() }
+                )
+            }
+            composable("bond_spam_screen") {
+                BondSpamScreen(
+                    viewModel = spamViewModel,
+                    onBack = { screenNavController.popBackStack() }
+                )
+            }
+            composable("customize_animations") {
+                CustomizeAnimationsScreen(onBack = { screenNavController.popBackStack() })
+            }
 
             composable("network_diagnostic_hub") { NetworkDiagnosticHubScreen(screenNavController) }
             composable("other/network_diagnostic_hub") { NetworkDiagnosticHubScreen(screenNavController) }
@@ -991,6 +1013,8 @@ fun MainScaffold(
             composable("other/lan_camera_scan") { CameraNetworkScanScreen(screenNavController) }
             composable("lan_camera_results") { CameraNetworkResultsScreen(screenNavController) }
             composable("other/lan_camera_results") { CameraNetworkResultsScreen(screenNavController) }
+            composable("my_cam") { MyCamScreen(screenNavController) }
+            composable("other/my_cam") { MyCamScreen(screenNavController) }
             composable("wifi_print") { WifiPrintScreen(screenNavController) }
             composable("other/wifi_print") { WifiPrintScreen(screenNavController) }
             composable("smarttv_cast") { SmartTvCastScreen(screenNavController) }
@@ -1001,7 +1025,11 @@ fun MainScaffold(
                 val section = bleSectionFromRoute(sectionRoute) ?: return@composable
                 BleSectionScreen(
                     section = section,
-                    onBack = { screenNavController.popBackStack("bluetooth", false) }
+                    onBack = {
+                        if (!screenNavController.popBackStack()) {
+                            screenNavController.navigateUp()
+                        }
+                    }
                 )
             }
             composable("nfc_tools") { NfcToolsScreen(screenNavController) }
@@ -1052,9 +1080,6 @@ fun MainScaffold(
             }
             composable("nfc_master_key") { NfcMasterKeyScreen(screenNavController, nfcViewModel) }
             composable("other/nfc_master_key") { NfcMasterKeyScreen(screenNavController, nfcViewModel) }
-            composable("other/bad_usb") {
-                com.droid.dolphy.hid.BadUsbScreen(screenNavController)
-            }
             composable("nfc_audio_spoofer") {
                 val accentColor = MaterialTheme.colorScheme.primary
                 NfcAudioSpooferScreen(screenNavController, accentColor = accentColor)
@@ -1268,11 +1293,12 @@ fun MainScaffold(
                 }
             }
         }
+        }
         PluginScreenExtensionHost(visibleRoute, screenNavController)
         }
 
         AnimatedVisibility(
-            visible = true,
+            visible = appStyleMode != 1,
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -1294,10 +1320,117 @@ fun MainScaffold(
                             openFunctionDestination(fabDestination, screenNavController, context)
                         }
                     },
+                    fabEnabled = fabEnabled,
                 )
             }
         }
+
+        val showUsbPopup by UsbIrManager.showPopup.collectAsState()
+        val isUsbConnected by UsbIrManager.isConnected.collectAsState()
+        val usbDongleName by UsbIrManager.connectedDeviceName.collectAsState()
+
+        if (showUsbPopup && isUsbConnected) {
+            UsbIrConnectedBottomSheet(
+                deviceName = usbDongleName,
+                onDismiss = { dontShowAgain ->
+                    UsbIrManager.dismissPopup(dontShowAgain)
+                }
+            )
+        }
     }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UsbIrConnectedBottomSheet(
+    deviceName: String?,
+    onDismiss: (dontShowAgain: Boolean) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var dontShowAgain by remember { mutableStateOf(false) }
+    val accentColor = MaterialTheme.colorScheme.primary
+
+    ModalBottomSheet(
+        onDismissRequest = { onDismiss(dontShowAgain) },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(top = 8.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = accentColor.copy(alpha = 0.15f),
+                modifier = Modifier.size(68.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Usb,
+                        contentDescription = "USB",
+                        tint = accentColor,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(R.string.usb_ir_connected_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+
+            Text(
+                text = deviceName ?: stringResource(R.string.usb_ir_connected_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { dontShowAgain = !dontShowAgain }
+                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = dontShowAgain,
+                    onCheckedChange = { dontShowAgain = it },
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = accentColor,
+                        checkmarkColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.dont_show_again),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            DolphyButton(
+                onClick = { onDismiss(dontShowAgain) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+            ) {
+                Text(
+                    text = "OK",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 
@@ -1319,6 +1452,7 @@ private fun DolphyUnifiedBottomBar(
     fabIcon: ImageVector,
     fabTitle: String,
     onFabClick: () -> Unit,
+    fabEnabled: Boolean = true,
 ) {
     val items = listOf(
         DolphyNavigationItem(stringResource(R.string.nav_bluetooth), Icons.Default.Bluetooth, bluetoothSelected, onBluetoothClick),
@@ -1334,74 +1468,76 @@ private fun DolphyUnifiedBottomBar(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        HorizontalFloatingToolbar(
-            expanded = true,
-            floatingActionButton = {
-                FloatingToolbarDefaults.VibrantFloatingActionButton(
-                    onClick = onFabClick,
-                    containerColor = MaterialTheme.colorScheme.primaryFixed,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+        val contentRow: @Composable () -> Unit = {
+            items.forEach { item ->
+                val shape = RoundedCornerShape(24.dp)
+                val containerColor by animateColorAsState(
+                    targetValue = if (item.selected) MaterialTheme.colorScheme.primaryFixed else MaterialTheme.colorScheme.surfaceContainer,
+                    label = "bottom_bar_container",
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (item.selected) MaterialTheme.colorScheme.onPrimaryFixed else MaterialTheme.colorScheme.onSurfaceVariant,
+                    label = "bottom_bar_content",
+                )
+                Row(
+                    modifier = Modifier
+                        .clip(shape)
+                        .background(containerColor, shape)
+                        .clickable(onClick = item.onClick)
+                        .padding(horizontal = if (item.selected) 16.dp else 12.dp, vertical = 12.dp)
+                        .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
                 ) {
                     Icon(
-                        imageVector = fabIcon,
-                        contentDescription = fabTitle,
+                        imageVector = item.icon,
+                        contentDescription = item.title,
+                        tint = contentColor,
                     )
-                }
-            },
-            modifier = Modifier.widthIn(max = 480.dp),
-            colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
-                toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            ),
-        ) {
-            items.forEach { item ->
-                AnimatedVisibility(
-                    visible = true,
-                    enter = expandHorizontally(
-                        expandFrom = Alignment.CenterHorizontally,
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
-                    ) + fadeIn(),
-                    exit = shrinkHorizontally(
-                        shrinkTowards = Alignment.CenterHorizontally,
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
-                    ) + fadeOut(),
-                ) {
-                    val shape = RoundedCornerShape(24.dp)
-                    val containerColor by animateColorAsState(
-                        targetValue = if (item.selected) MaterialTheme.colorScheme.primaryFixed else MaterialTheme.colorScheme.surfaceContainer,
-                        label = "bottom_bar_container",
-                    )
-                    val contentColor by animateColorAsState(
-                        targetValue = if (item.selected) MaterialTheme.colorScheme.onPrimaryFixed else MaterialTheme.colorScheme.onSurfaceVariant,
-                        label = "bottom_bar_content",
-                    )
-                    Row(
-                        modifier = Modifier
-                            .clip(shape)
-                            .background(containerColor, shape)
-                            .clickable(onClick = item.onClick)
-                            .padding(horizontal = if (item.selected) 16.dp else 12.dp, vertical = 12.dp)
-                            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        Icon(
-                            imageVector = item.icon,
-                            contentDescription = item.title,
-                            tint = contentColor,
+                    if (item.selected) {
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            text = item.title,
+                            color = contentColor,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
-                        if (item.selected) {
-                            Spacer(Modifier.size(8.dp))
-                            Text(
-                                text = item.title,
-                                color = contentColor,
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                        }
                     }
                 }
             }
+        }
+
+        if (fabEnabled) {
+            HorizontalFloatingToolbar(
+                expanded = true,
+                floatingActionButton = {
+                    FloatingToolbarDefaults.VibrantFloatingActionButton(
+                        onClick = onFabClick,
+                        containerColor = MaterialTheme.colorScheme.primaryFixed,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+                    ) {
+                        Icon(
+                            imageVector = fabIcon,
+                            contentDescription = fabTitle,
+                        )
+                    }
+                },
+                modifier = Modifier.widthIn(max = 480.dp),
+                colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                    toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
+                content = { contentRow() }
+            )
+        } else {
+            HorizontalFloatingToolbar(
+                expanded = true,
+                modifier = Modifier.widthIn(max = 480.dp),
+                colors = FloatingToolbarDefaults.standardFloatingToolbarColors(
+                    toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
+                content = { contentRow() }
+            )
         }
     }
 }
@@ -1482,7 +1618,8 @@ private fun isSettingsSectionRoute(route: String): Boolean {
 
     if (route == "plugin_manager" || route == "plugin_security" ||
         route == "plugin_about" ||
-        route == "plugin_install_helper"
+        route == "plugin_install_helper" ||
+        route == "customize_animations"
     ) {
         return true
     }
@@ -1492,52 +1629,49 @@ private fun isSettingsSectionRoute(route: String): Boolean {
 }
 
 
+private val OTHER_ROUTE_PREFIXES = setOf(
+    "nfc_tools",
+    "nfc_erase",
+    "nfc_write_menu",
+    "nfc_write_contact",
+    "nfc_write_wait",
+    "nfc_write_form/",
+    "nfc_wait",
+    "nfc_history",
+    "nfc_emulator_list",
+    "nfc_emulator_run/",
+    "nfc_result/",
+    "nfc_trolls",
+    "audio_scanner",
+    "bt_audio_stress_scan",
+    "bt_audio_stress_run",
+    "network_diagnostic_hub",
+    "bluetooth_whisperpair",
+    "qr_tools",
+    "qr_audio_spoofer",
+    "ir_tv_home",
+    "ir_flipper_home",
+    "ir_favorites",
+    "user_ir_remotes",
+    "user_ir_remote/",
+    "ir_storm",
+    "ir_jammer",
+    "universal_remotes_home",
+    "universal_remote/",
+    "tv_brand/",
+    "tv_remote/",
+    "flipper_cat/",
+    "flipper_brand/",
+    "flipper_remote/"
+)
+
 private fun isOtherSectionRoute(route: String): Boolean {
     if (route == "other" || route.startsWith("other/")) return true
-
     if (route.startsWith("plugin/")) return true
-
     if (route == "plugin_manager" || route == "plugin_security" || route == "plugin_about" || route == "plugin_install_helper") {
         return false
     }
-
-    val otherRoutePrefixes = listOf(
-        "nfc_tools",
-        "nfc_erase",
-        "nfc_write_menu",
-        "nfc_write_contact",
-        "nfc_write_wait",
-        "nfc_write_form/",
-        "nfc_wait",
-        "nfc_history",
-        "nfc_emulator_list",
-        "nfc_emulator_run/",
-        "nfc_result/",
-        "nfc_trolls",
-        "audio_scanner",
-        "bt_audio_stress_scan",
-        "bt_audio_stress_run",
-        "network_diagnostic_hub",
-        "bluetooth_whisperpair",
-        "qr_tools",
-        "qr_audio_spoofer",
-        "ir_tv_home",
-        "ir_flipper_home",
-        "ir_favorites",
-        "user_ir_remotes",
-        "user_ir_remote/",
-        "ir_storm",
-        "ir_jammer",
-        "universal_remotes_home",
-        "universal_remote/",
-        "tv_brand/",
-        "tv_remote/",
-        "flipper_cat/",
-        "flipper_brand/",
-        "flipper_remote/"
-    )
-
-    return otherRoutePrefixes.any { prefix ->
+    return OTHER_ROUTE_PREFIXES.any { prefix ->
         route == prefix.removeSuffix("/") || route.startsWith(prefix)
     }
 }
@@ -1550,12 +1684,14 @@ private fun rootSectionEnterTransition(
     val targetIndex = rootSectionIndex(targetRoute) ?: return null
     if (initialIndex == targetIndex) return null
 
-    return slideInHorizontally(
-        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
-        initialOffsetX = { fullWidth ->
-            if (targetIndex > initialIndex) fullWidth else -fullWidth
-        }
-    ) + fadeIn(animationSpec = tween(durationMillis = 180))
+    return fadeIn(animationSpec = tween(durationMillis = 180, easing = LinearOutSlowInEasing)) +
+        slideInHorizontally(
+            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+            initialOffsetX = { fullWidth ->
+                val dir = if (targetIndex > initialIndex) 1 else -1
+                dir * (fullWidth / 10)
+            }
+        )
 }
 
 private fun rootSectionExitTransition(
@@ -1566,12 +1702,7 @@ private fun rootSectionExitTransition(
     val targetIndex = rootSectionIndex(targetRoute) ?: return null
     if (initialIndex == targetIndex) return null
 
-    return slideOutHorizontally(
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
-        targetOffsetX = { fullWidth ->
-            if (targetIndex > initialIndex) -fullWidth else fullWidth
-        }
-    ) + fadeOut(animationSpec = tween(durationMillis = 140))
+    return fadeOut(animationSpec = tween(durationMillis = 130, easing = FastOutLinearInEasing))
 }
 
 private fun cornerEnterTransition(): EnterTransition {
@@ -1641,44 +1772,19 @@ fun BluetoothContainerScreen(viewModel: SpamViewModel, navController: NavControl
     var tabIndex by remember { mutableIntStateOf(savedTabIndex) }
     val tabs = listOf("All", "BLE", "Advert")
     val tabRoutes = listOf("all", "ble", "advert")
-    var showBluetoothDialog by remember { mutableStateOf(false) }
-    val accentColor = MaterialTheme.colorScheme.primary
-
-    if (showBluetoothDialog) {
-        ExpressiveDialog(
-            onDismissRequest = { showBluetoothDialog = false },
-            title = { Text(stringResource(R.string.bluetooth_disabled)) },
-            text = {
-                Text(
-                    stringResource(R.string.bluetooth_disabled_message),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                AccentButton(onClick = {
-                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
-                    context.startActivity(intent)
-                    showBluetoothDialog = false
-                }) {
-                    Text(stringResource(R.string.bluetooth_enable))
-                }
-            },
-            dismissButton = {
-                AccentButton(onClick = { showBluetoothDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-            accentColor = accentColor
-        )
-    }
-
+    val btEnableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
     val bluetoothAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     val isBluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
 
-    if (!isBluetoothEnabled) {
-        showBluetoothDialog = true
+    LaunchedEffect(isBluetoothEnabled) {
+        if (!isBluetoothEnabled) {
+            try {
+                btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } catch (_: Exception) {}
+        }
     }
+
+    val accentColor = MaterialTheme.colorScheme.primary
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -1709,6 +1815,9 @@ fun BluetoothContainerScreen(viewModel: SpamViewModel, navController: NavControl
                                 val effectiveIndex = tabRoutes.indexOf(requested).takeIf { it >= 0 }
                                     ?: changed?.optInt("index", index)?.coerceIn(0, tabs.lastIndex)
                                     ?: index
+                                if (tabIndex != effectiveIndex) {
+                                    vibrate(context)
+                                }
                                 tabIndex = effectiveIndex
                                 viewModel.setBleTabIndex(effectiveIndex)
                             }
@@ -1749,6 +1858,7 @@ fun BluetoothContainerScreen(viewModel: SpamViewModel, navController: NavControl
                             if (!decision.cancelled && !decision.handled) {
                                 val changed = runCatching { JSONObject(decision.payloadJson) }.getOrNull()
                                 val route = changed?.optString("section")?.ifBlank { section.route } ?: section.route
+                                vibrate(context)
                                 navController.navigate("ble_section/$route")
                             }
                         }
@@ -2185,7 +2295,6 @@ fun AllSpamScreen(viewModel: SpamViewModel) {
                     .weight(1f)
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .clip(RoundedCornerShape(20.dp))
-                    .border(1.5.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
             )
 
 
@@ -2234,10 +2343,8 @@ fun AllSpamScreen(viewModel: SpamViewModel) {
 }
 
 
-private var sessionExternalDolphinAnimationName: String? = null
-
 @Composable
-private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
+internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val accent = MaterialTheme.colorScheme.primary
     val dolphyState by DolphyRepository.state.collectAsState()
@@ -2247,10 +2354,21 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
     var cyclicAnimationEnabled by remember {
         mutableStateOf(prefs.getBoolean("cyclic_dolphin_animation_enabled", false))
     }
+    var pinnedAnimName by remember {
+        mutableStateOf(prefs.getString("pinned_dolphin_animation_name", null))
+    }
+    var pinnedAnimRoot by remember {
+        mutableStateOf(prefs.getString("pinned_dolphin_animation_root", null))
+    }
+    var randomSeed by remember { mutableIntStateOf(0) }
+
     DisposableEffect(prefs) {
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { sharedPreferences, key ->
             if (key == "cyclic_dolphin_animation_enabled") {
                 cyclicAnimationEnabled = sharedPreferences.getBoolean(key, false)
+            } else if (key == "pinned_dolphin_animation_name" || key == "pinned_dolphin_animation_root") {
+                pinnedAnimName = sharedPreferences.getString("pinned_dolphin_animation_name", null)
+                pinnedAnimRoot = sharedPreferences.getString("pinned_dolphin_animation_root", null)
             }
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -2258,36 +2376,70 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
             prefs.unregisterOnSharedPreferenceChangeListener(listener)
         }
     }
-    val root = "dolphin/external"
+
     val animations by androidx.compose.runtime.produceState(
         initialValue = emptyList<ExternalAnimationMeta>(),
-        key1 = Unit
+        key1 = dolphyState.level,
+        key2 = pinnedAnimRoot
     ) {
         value = withContext(Dispatchers.IO) {
-            loadExternalAnimationMeta(context, root)
+            val list = mutableListOf<ExternalAnimationMeta>()
+            list.addAll(loadExternalAnimationMeta(context, "dolphin/external"))
+            if (dolphyState.level >= 50 || pinnedAnimRoot == "dolphin/watchdogs") {
+                list.addAll(loadExternalAnimationMeta(context, "dolphin/watchdogs"))
+            }
+            list
         }
     }
-    val validAnimations = remember(animations, dolphyState.level, dolphyState.butthurt) {
-        animations.filter {
-            dolphyState.level in it.minLevel..it.maxLevel &&
-                dolphyState.butthurt in it.minButthurt..it.maxButthurt
+
+    val currentAnimation = remember(animations, dolphyState.level, dolphyState.butthurt, pinnedAnimName, randomSeed) {
+        if (animations.isEmpty()) return@remember null
+
+        if (!pinnedAnimName.isNullOrBlank()) {
+            val pinned = animations.firstOrNull { it.name == pinnedAnimName }
+            if (pinned != null) return@remember pinned
         }
-    }
-    val currentAnimation = remember(validAnimations) {
-        if(validAnimations.isEmpty()) {
-            null
+
+        val pool = if (dolphyState.level >= 50) {
+            animations
         } else {
-            val sessionName = sessionExternalDolphinAnimationName
-            val existing = validAnimations.firstOrNull { it.name == sessionName }
-            if(existing != null) {
-                existing
+            animations.filter { !it.isWatchDogs }
+        }
+
+        val effectiveLevel = dolphyState.level.coerceIn(1, 3)
+        val filtered = pool.filter {
+            if (it.isWatchDogs) {
+                dolphyState.level >= 50
             } else {
-                val picked = selectWeightedAnimation(validAnimations)
-                sessionExternalDolphinAnimationName = picked?.name
-                picked
+                effectiveLevel in it.minLevel..it.maxLevel &&
+                    dolphyState.butthurt in it.minButthurt..it.maxButthurt
             }
         }
+        val validAnimations = if (filtered.isNotEmpty()) {
+            filtered
+        } else {
+            val byLevel = pool.filter {
+                if (it.isWatchDogs) dolphyState.level >= 50 else effectiveLevel in it.minLevel..it.maxLevel
+            }
+            if (byLevel.isNotEmpty()) byLevel else pool
+        }
+
+        val sessionName = sessionExternalDolphinAnimationName
+        val existing = validAnimations.firstOrNull { it.name == sessionName }
+        if (existing != null && randomSeed == 0) {
+            existing
+        } else {
+            val otherPool = if (validAnimations.size > 1 && sessionName != null) {
+                validAnimations.filter { it.name != sessionName }
+            } else {
+                validAnimations
+            }
+            val picked = selectWeightedAnimation(otherPool) ?: selectWeightedAnimation(validAnimations)
+            sessionExternalDolphinAnimationName = picked?.name
+            picked
+        }
     }
+
     val currentFrames = remember(currentAnimation) { currentAnimation?.frames.orEmpty() }
     val decodedFrames by androidx.compose.runtime.produceState(
         initialValue = emptyList<androidx.compose.ui.graphics.ImageBitmap>(),
@@ -2295,11 +2447,7 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
     ) {
         value = withContext(Dispatchers.IO) {
             currentFrames.mapNotNull { framePath ->
-                runCatching {
-                    context.assets.open(framePath).use { stream ->
-                        BitmapFactory.decodeStream(stream)?.asImageBitmap()
-                    }
-                }.getOrNull()
+                DolphinAnimationCache.getOrDecodeFrame(context, framePath)
             }
         }
     }
@@ -2307,7 +2455,6 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
     var frameIndex by remember(decodedFrames) { mutableIntStateOf(0) }
     val frameDelayMs = remember(currentAnimation) {
         val frameRate = (currentAnimation?.frameRate ?: 2).coerceAtLeast(1)
-
         (1000L / (frameRate * 4)).coerceAtLeast(28L)
     }
 
@@ -2332,7 +2479,12 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .offset(y = (-6).dp)
-            .clip(RoundedCornerShape(20.dp)),
+            .clip(RoundedCornerShape(20.dp))
+            .then(
+                if (pinnedAnimName.isNullOrBlank()) {
+                    Modifier.clickable { randomSeed++ }
+                } else Modifier
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (frameBitmap != null) {
@@ -2349,117 +2501,6 @@ private fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
                 )
             )
         }
-    }
-}
-
-private fun frameNumberFromName(fileName: String): Int {
-    return Regex("""frame_(\d+)\.png""")
-        .find(fileName)
-        ?.groupValues
-        ?.getOrNull(1)
-        ?.toIntOrNull()
-        ?: Int.MAX_VALUE
-}
-
-private data class ExternalAnimationManifestRow(
-    val name: String,
-    val minButthurt: Int,
-    val maxButthurt: Int,
-    val minLevel: Int,
-    val maxLevel: Int,
-    val weight: Int,
-)
-
-private data class ExternalAnimationMeta(
-    val name: String,
-    val minButthurt: Int,
-    val maxButthurt: Int,
-    val minLevel: Int,
-    val maxLevel: Int,
-    val weight: Int,
-    val frameRate: Int,
-    val durationSec: Int,
-    val frames: List<String>,
-)
-
-private fun selectWeightedAnimation(items: List<ExternalAnimationMeta>): ExternalAnimationMeta? {
-    if(items.isEmpty()) return null
-    val totalWeight = items.sumOf { it.weight.coerceAtLeast(1) }
-    var lucky = Random.nextInt(totalWeight.coerceAtLeast(1))
-    items.forEach { item ->
-        lucky -= item.weight.coerceAtLeast(1)
-        if(lucky < 0) return item
-    }
-    return items.last()
-}
-
-private fun parseManifestRows(raw: String): List<ExternalAnimationManifestRow> {
-    val rows = mutableListOf<ExternalAnimationManifestRow>()
-    val lines = raw.lineSequence().map { it.trim() }.toList()
-    var index = 0
-    while(index < lines.size) {
-        if(lines[index].startsWith("Name:", true)) {
-            val block = mutableMapOf<String, String>()
-            while(index < lines.size && lines[index].isNotBlank()) {
-                val line = lines[index]
-                val sep = line.indexOf(':')
-                if(sep > 0) {
-                    block[line.substring(0, sep).trim().lowercase()] =
-                        line.substring(sep + 1).trim()
-                }
-                index++
-            }
-            val name = block["name"] ?: ""
-            if(name.isNotBlank()) {
-                rows += ExternalAnimationManifestRow(
-                    name = name,
-                    minButthurt = block["min butthurt"]?.toIntOrNull() ?: 0,
-                    maxButthurt = block["max butthurt"]?.toIntOrNull() ?: 14,
-                    minLevel = block["min level"]?.toIntOrNull() ?: 1,
-                    maxLevel = block["max level"]?.toIntOrNull() ?: 3,
-                    weight = block["weight"]?.toIntOrNull() ?: 1,
-                )
-            }
-        }
-        index++
-    }
-    return rows
-}
-
-private suspend fun loadExternalAnimationMeta(
-    context: Context,
-    root: String,
-): List<ExternalAnimationMeta> {
-    val manifestText = runCatching {
-        context.assets.open("$root/manifest.txt").bufferedReader().use { it.readText() }
-    }.getOrNull() ?: return emptyList()
-    val rows = parseManifestRows(manifestText)
-    return rows.mapNotNull { row ->
-        val folderPath = "$root/${row.name}"
-        val frames = context.assets.list(folderPath)
-            ?.filter { it.startsWith("frame_") && it.endsWith(".png") }
-            ?.sortedBy { frameNumberFromName(it) }
-            ?.map { "$folderPath/$it" }
-            .orEmpty()
-        if(frames.isEmpty()) return@mapNotNull null
-        val metaText = runCatching {
-            context.assets.open("$folderPath/meta.txt").bufferedReader().use { it.readText() }
-        }.getOrNull().orEmpty()
-        val frameRate = Regex("""(?im)^Frame rate:\s*(\d+)""")
-            .find(metaText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 2
-        val duration = Regex("""(?im)^Duration:\s*(\d+)""")
-            .find(metaText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 20
-        ExternalAnimationMeta(
-            name = row.name,
-            minButthurt = row.minButthurt,
-            maxButthurt = row.maxButthurt,
-            minLevel = row.minLevel,
-            maxLevel = row.maxLevel,
-            weight = row.weight,
-            frameRate = frameRate,
-            durationSec = duration,
-            frames = frames,
-        )
     }
 }
 
@@ -2493,13 +2534,6 @@ fun BleSpamScreen(viewModel: SpamViewModel, onSectionClick: (BleSection) -> Unit
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            Text(
-                text = "BLE Spam",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
 
 
         item {
@@ -2613,6 +2647,28 @@ fun BleSpamScreen(viewModel: SpamViewModel, onSectionClick: (BleSection) -> Unit
                 fullyRounded = true
             )
         }
+        item {
+            val mode = ContinuityMode(ContinuityType.ICLOUD_SPOOF, false)
+            AnimatedBleButton(
+                text = "iCloud Spoof",
+                isActive = spammingStates[Pair(SpamType.CONTINUITY, mode)] == true,
+                onClick = { ensureBluetoothEnabled { viewModel.toggleBleSpam(SpamType.CONTINUITY, mode) } },
+                blinkIntervalMs = bleDelay.toLong(),
+                modifier = Modifier.fillMaxWidth(),
+                fullyRounded = true
+            )
+        }
+        item {
+            val mode = ContinuityMode(ContinuityType.NEARBY_INFO, false)
+            AnimatedBleButton(
+                text = "Nearby Info",
+                isActive = spammingStates[Pair(SpamType.CONTINUITY, mode)] == true,
+                onClick = { ensureBluetoothEnabled { viewModel.toggleBleSpam(SpamType.CONTINUITY, mode) } },
+                blinkIntervalMs = bleDelay.toLong(),
+                modifier = Modifier.fillMaxWidth(),
+                fullyRounded = true
+            )
+        }
 
         item { BleSectionHeader(section = BleSection.SAMSUNG) { onSectionClick(BleSection.SAMSUNG) } }
         item {
@@ -2655,6 +2711,28 @@ fun BleSpamScreen(viewModel: SpamViewModel, onSectionClick: (BleSection) -> Unit
                 text = "Xiaomi Quick Connect",
                 isActive = spammingStates[Pair(SpamType.XIAOMI, null)] == true,
                 onClick = { ensureBluetoothEnabled { viewModel.toggleBleSpam(SpamType.XIAOMI, null) } },
+                blinkIntervalMs = bleDelay.toLong(),
+                modifier = Modifier.fillMaxWidth(),
+                fullyRounded = true
+            )
+        }
+
+        item { BleSectionHeader(section = BleSection.VIVO) { onSectionClick(BleSection.VIVO) } }
+        item {
+            AnimatedBleButton(
+                text = "Vivo TWS",
+                isActive = spammingStates[Pair(SpamType.VIVO, VivoDevice.Type.TWS)] == true,
+                onClick = { ensureBluetoothEnabled { viewModel.toggleBleSpam(SpamType.VIVO, VivoDevice.Type.TWS) } },
+                blinkIntervalMs = bleDelay.toLong(),
+                modifier = Modifier.fillMaxWidth(),
+                fullyRounded = true
+            )
+        }
+        item {
+            AnimatedBleButton(
+                text = "Vivo Gamepad",
+                isActive = spammingStates[Pair(SpamType.VIVO, VivoDevice.Type.GAMEPAD)] == true,
+                onClick = { ensureBluetoothEnabled { viewModel.toggleBleSpam(SpamType.VIVO, VivoDevice.Type.GAMEPAD) } },
                 blinkIntervalMs = bleDelay.toLong(),
                 modifier = Modifier.fillMaxWidth(),
                 fullyRounded = true
@@ -2928,7 +3006,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         accentColor = accentColor,
                         contentPadding = 12.dp
                     ) {
-                        DolphyScreen(dolphyViewModel)
+                        DolphyScreen(dolphyViewModel, navController)
                     }
                 }
             }
@@ -2938,7 +3016,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                 Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
                     M3SegmentedListSectionHeader(title = stringResource(R.string.settings_general).uppercase())
 
-                    val generalItems = 3
+                    val generalItems = 4
 
 
                     MaterialCard(
@@ -3033,6 +3111,42 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
+
+                    val performanceModeEnabled by spamViewModel.performanceModeEnabled.collectAsState()
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(3, generalItems),
+                        contentPadding = 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Speed,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.settings_performance_mode),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    stringResource(R.string.settings_performance_mode_summary),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            DolphySwitch(
+                                checked = performanceModeEnabled,
+                                onCheckedChange = { spamViewModel.setPerformanceModeEnabled(it) }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -3040,7 +3154,10 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                 Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
                     M3SegmentedListSectionHeader(title = stringResource(R.string.settings_personalisation).uppercase())
                     val liquidGlassEnabled by spamViewModel.liquidGlassEnabled.collectAsState()
-                    val interfaceItems = if (liquidGlassEnabled) 6 else 5
+                    val functionsMenuViewType by spamViewModel.functionsMenuViewType.collectAsState()
+                    val functionsTileSize by spamViewModel.functionsTileSize.collectAsState()
+                    val appStyleMode by spamViewModel.appStyleMode.collectAsState()
+                    val interfaceItems = 5 + 1 + 1 + (if (functionsMenuViewType == 1) 1 else 0) + (if (liquidGlassEnabled) 1 else 0)
 
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
@@ -3209,6 +3326,172 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         }
                     }
 
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(5, interfaceItems),
+                        contentPadding = 12.dp,
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.GridView,
+                                    contentDescription = null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    stringResource(R.string.settings_functions_menu_view),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            val viewOptions = listOf(
+                                stringResource(R.string.settings_functions_menu_containers),
+                                stringResource(R.string.settings_functions_menu_tiles)
+                            )
+                            SingleChoiceSegmentedButtonRow(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                viewOptions.forEachIndexed { index, title ->
+                                    SegmentedButton(
+                                        selected = functionsMenuViewType == index,
+                                        onClick = {
+                                            if (functionsMenuViewType != index) {
+                                                vibrate(context)
+                                                spamViewModel.setFunctionsMenuViewType(index)
+                                            }
+                                        },
+                                        shape = SegmentedButtonDefaults.itemShape(index, viewOptions.size),
+                                        colors = SegmentedButtonDefaults.colors(
+                                            activeContainerColor = MaterialTheme.colorScheme.primaryFixed,
+                                            activeContentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+                                            activeBorderColor = MaterialTheme.colorScheme.primaryFixed,
+                                            inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant
+                                        ),
+                                        icon = {},
+                                        label = {
+                                            Text(
+                                                text = title,
+                                                fontWeight = if (functionsMenuViewType == index) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (functionsMenuViewType == 1) {
+                        MaterialCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            accentColor = accentColor,
+                            shape = getSegmentedShape(6, interfaceItems),
+                            contentPadding = 10.dp
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.AspectRatio,
+                                        contentDescription = null,
+                                        tint = accentColor,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(
+                                        stringResource(R.string.settings_functions_tile_size),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        "${functionsTileSize.toInt()} dp",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = accentColor,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                DolphySlider(
+                                    value = functionsTileSize,
+                                    onValueChange = { spamViewModel.setFunctionsTileSize(it) },
+                                    valueRange = 100f..200f,
+                                    steps = 9,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = accentColor,
+                                        activeTrackColor = accentColor,
+                                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(if (functionsMenuViewType == 1) 7 else 6, interfaceItems),
+                        contentPadding = 12.dp,
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Style,
+                                    contentDescription = null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    stringResource(R.string.settings_app_style),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            val styleOptions = listOf(
+                                stringResource(R.string.settings_app_style_old),
+                                stringResource(R.string.settings_app_style_new)
+                            )
+                            SingleChoiceSegmentedButtonRow(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                styleOptions.forEachIndexed { index, title ->
+                                    SegmentedButton(
+                                        selected = appStyleMode == index,
+                                        onClick = {
+                                            if (appStyleMode != index) {
+                                                vibrate(context)
+                                                spamViewModel.setAppStyleMode(index)
+                                                if (index == 1) {
+                                                    navController.navigate("other") {
+                                                        popUpTo("other") { inclusive = true }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        shape = SegmentedButtonDefaults.itemShape(index, styleOptions.size),
+                                        colors = SegmentedButtonDefaults.colors(
+                                            activeContainerColor = MaterialTheme.colorScheme.primaryFixed,
+                                            activeContentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+                                            activeBorderColor = MaterialTheme.colorScheme.primaryFixed,
+                                            inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            inactiveBorderColor = MaterialTheme.colorScheme.outlineVariant
+                                        ),
+                                        icon = {},
+                                        label = {
+                                            Text(
+                                                text = title,
+                                                fontWeight = if (appStyleMode == index) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     if (liquidGlassEnabled) {
                     val liquidGlassButtonsPref by spamViewModel.liquidGlassButtons.collectAsState()
                     val liquidGlassTopBarsPref by spamViewModel.liquidGlassTopBars.collectAsState()
@@ -3218,7 +3501,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
                         accentColor = accentColor,
-                        shape = getSegmentedShape(5, interfaceItems),
+                        shape = getSegmentedShape(if (functionsMenuViewType == 1) 8 else 7, interfaceItems),
                         contentPadding = 0.dp
                     ) {
                         Column {
@@ -3333,56 +3616,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
             }
 
 
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
-                    val sensitivityMove by spamViewModel.hidTouchpadSensitivityMove.collectAsState()
-                    val sensitivityScroll by spamViewModel.hidTouchpadSensitivityScroll.collectAsState()
-                    val generalCount = 2
 
-                    MaterialCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        accentColor = accentColor,
-                        shape = getSegmentedShape(0, generalCount),
-                        contentPadding = 10.dp
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.settings_hid_sensitivity_move), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                                Text(String.format("%.1fx", sensitivityMove), style = MaterialTheme.typography.bodyMedium, color = accentColor, fontWeight = FontWeight.Bold)
-                            }
-                            DolphySlider(
-                                value = sensitivityMove,
-                                onValueChange = { spamViewModel.setHidTouchpadSensitivityMove(it) },
-                                valueRange = 0.5f..3.0f,
-                                steps = 24,
-                                colors = SliderDefaults.colors(thumbColor = accentColor, activeTrackColor = accentColor)
-                            )
-                        }
-                    }
-
-                    MaterialCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        accentColor = accentColor,
-                        shape = getSegmentedShape(1, generalCount),
-                        contentPadding = 10.dp
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.settings_hid_sensitivity_scroll), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                                Text(String.format("%.1fx", sensitivityScroll), style = MaterialTheme.typography.bodyMedium, color = accentColor, fontWeight = FontWeight.Bold)
-                            }
-                            DolphySlider(
-                                value = sensitivityScroll,
-                                onValueChange = { spamViewModel.setHidTouchpadSensitivityScroll(it) },
-                                valueRange = 0.1f..1.0f,
-                                steps = 17,
-                                colors = SliderDefaults.colors(thumbColor = accentColor, activeTrackColor = accentColor)
-                            )
-                        }
-                    }
-
-                }
-            }
 
             item {
                 PluginSettingsSections(navController)
@@ -3470,6 +3704,16 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Text(
+                        text = "Winterballs",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Pinaplast",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -3480,16 +3724,15 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
 @Composable
 private fun BleSectionHeader(section: BleSection, onClick: () -> Unit) {
     val isDarkTheme = !isLightColor(MaterialTheme.colorScheme.background)
-    val resources = LocalContext.current.resources
     val logoRes = when (section) {
         BleSection.IOS -> if (isDarkTheme) R.drawable.ble_logo_ios_white else R.drawable.ble_logo_ios
         BleSection.ANDROID -> R.drawable.ble_logo_android
         BleSection.SAMSUNG -> R.drawable.ble_logo_samsung
         BleSection.WINDOWS -> R.drawable.ble_logo_windows
         BleSection.XIAOMI -> R.drawable.ble_logo_xiaomi
+        BleSection.VIVO -> R.drawable.ble_logo_vivo
         BleSection.PHANTOM -> R.drawable.ic_bluetooth_pixel
     }
-    val logoBitmap = remember(logoRes) { ImageBitmap.imageResource(resources, logoRes) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3497,7 +3740,7 @@ private fun BleSectionHeader(section: BleSection, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
-            bitmap = logoBitmap,
+            painter = painterResource(id = logoRes),
             contentDescription = "${section.title} logo",
             modifier = Modifier
                 .height(18.dp)
@@ -3521,6 +3764,8 @@ private fun buildBleSectionModeGroups(context: Context, section: BleSection): Li
             val airTagItems = allDevices.filter { it.name in airTags }
             val notYourItems = ContinuitySpam(ContinuityType.NOTYOURDEVICE).devices
             val actionItems = ContinuitySpam(ContinuityType.ACTION).devices
+            val icloudItems = ContinuitySpam(ContinuityType.ICLOUD_SPOOF).devices
+            val nearbyItems = ContinuitySpam(ContinuityType.NEARBY_INFO).devices
             listOf(
                 BleModeGroup(
                     title = context.getString(R.string.ble_list_apple),
@@ -3555,6 +3800,20 @@ private fun buildBleSectionModeGroups(context: Context, section: BleSection): Li
                     modes = listOf(Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.ACTION, true))),
                     items = actionItems.map { device ->
                         BleDeviceItem(device.name) { ContinuitySingleSpam(device, true) }
+                    }
+                ),
+                BleModeGroup(
+                    title = "iCloud Spoof",
+                    modes = listOf(Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.ICLOUD_SPOOF, false))),
+                    items = icloudItems.map { device ->
+                        BleDeviceItem(device.name) { ContinuitySingleSpam(device, false) }
+                    }
+                ),
+                BleModeGroup(
+                    title = "Nearby Info",
+                    modes = listOf(Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.NEARBY_INFO, false))),
+                    items = nearbyItems.map { device ->
+                        BleDeviceItem(device.name) { ContinuitySingleSpam(device, false) }
                     }
                 )
             )
@@ -3599,6 +3858,26 @@ private fun buildBleSectionModeGroups(context: Context, section: BleSection): Li
                     items = listOf(
                         BleDeviceItem("Xiaomi Quick Connect (Randomized)") { XiaomiQuickConnect() }
                     )
+                )
+            )
+        }
+        BleSection.VIVO -> {
+            val tws = VivoSpam(VivoDevice.Type.TWS).devices
+            val gamepads = VivoSpam(VivoDevice.Type.GAMEPAD).devices
+            listOf(
+                BleModeGroup(
+                    title = context.getString(R.string.ble_list_vivo_tws),
+                    modes = listOf(Pair(SpamType.VIVO, VivoDevice.Type.TWS)),
+                    items = tws.map { device ->
+                        BleDeviceItem(device.name + " (id " + device.modelId + ")") { VivoSingleSpam(device) }
+                    }
+                ),
+                BleModeGroup(
+                    title = context.getString(R.string.ble_list_vivo_gamepad),
+                    modes = listOf(Pair(SpamType.VIVO, VivoDevice.Type.GAMEPAD)),
+                    items = gamepads.map { device ->
+                        BleDeviceItem(device.name + " [" + device.localName + "]") { VivoSingleSpam(device) }
+                    }
                 )
             )
         }
@@ -3686,56 +3965,47 @@ fun BleSectionScreen(section: BleSection, onBack: () -> Unit) {
 
     BackHandler { onBack() }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            SectionTopBar(
+                title = section.title,
+                onBack = onBack
+            )
+        }
+    ) { paddingValues ->
         MaterialBackground(accentColor = accent) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
+                    .padding(paddingValues)
                     .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 160.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        DolphyIconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                        }
-                    }
-                }
-
-                item {
                     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-                    val resources = LocalContext.current.resources
                     val logoRes = when (section) {
                         BleSection.IOS -> if (isDark) R.drawable.ble_logo_ios_white else R.drawable.ble_logo_ios
                         BleSection.ANDROID -> R.drawable.ble_logo_android
                         BleSection.SAMSUNG -> R.drawable.ble_logo_samsung
                         BleSection.WINDOWS -> R.drawable.ble_logo_windows
                         BleSection.XIAOMI -> R.drawable.ble_logo_xiaomi
+                        BleSection.VIVO -> R.drawable.ble_logo_vivo
                         BleSection.PHANTOM -> R.drawable.ic_bluetooth_pixel
                     }
-                    val logoBitmap = remember(logoRes) { ImageBitmap.imageResource(resources, logoRes) }
                     Box(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
-                            bitmap = logoBitmap,
+                            painter = painterResource(id = logoRes),
                             contentDescription = section.title,
-                            modifier = Modifier.size(42.dp)
+                            modifier = Modifier.size(48.dp)
                         )
                     }
-                }
-
-                item {
-                    Text(
-                        text = section.title,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
                 }
 
                 item {
@@ -3743,7 +4013,9 @@ fun BleSectionScreen(section: BleSection, onBack: () -> Unit) {
                     Text(
                         text = "$deviceCount Devices in ${groups.size} Lists",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
                     )
                 }
 
@@ -3826,6 +4098,11 @@ fun AccentColorScreen(viewModel: SpamViewModel, onNavigateBack: () -> Unit) {
     val isAdaptive by viewModel.isAdaptiveColor.collectAsState()
     val context = LocalContext.current
 
+    var showRgbDialog by remember { mutableStateOf(false) }
+    var customR by remember(selectedAccentColor) { mutableStateOf((selectedAccentColor.red * 255).toInt().coerceIn(0, 255)) }
+    var customG by remember(selectedAccentColor) { mutableStateOf((selectedAccentColor.green * 255).toInt().coerceIn(0, 255)) }
+    var customB by remember(selectedAccentColor) { mutableStateOf((selectedAccentColor.blue * 255).toInt().coerceIn(0, 255)) }
+
     data class Theme(val name: String, val accent: Color, val gradientColors: List<Color>, val isAdaptive: Boolean = false)
     val baseThemes = listOf(
         Theme("Dolphy", OrangeAccent, listOf(OrangeAccent, Color(0xFFFF6600), Color(0xFFFF3300))),
@@ -3854,21 +4131,32 @@ fun AccentColorScreen(viewModel: SpamViewModel, onNavigateBack: () -> Unit) {
                 accentColor = accentColor,
                 cornerRadius = 12.dp
             ) {
-                Row(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    DolphyIconButton(onClick = onNavigateBack) {
+                    DolphyIconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.align(Alignment.CenterStart)
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = accentColor)
                     }
                     Text(
                         text = stringResource(R.string.theme_selection_title),
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.padding(start = 8.dp)
+                        modifier = Modifier.align(Alignment.Center)
                     )
+                    DolphyIconButton(
+                        onClick = {
+                            vibrate(context)
+                            showRgbDialog = true
+                        },
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Color", tint = accentColor)
+                    }
                 }
             }
         }
@@ -3931,8 +4219,160 @@ fun AccentColorScreen(viewModel: SpamViewModel, onNavigateBack: () -> Unit) {
                     }
                 }
             }
+
+            item {
+                val isCustomSelected = !isAdaptive && themes.none { !it.isAdaptive && it.accent.toArgb() == selectedAccentColor.toArgb() }
+                MaterialCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    accentColor = selectedAccentColor,
+                    cornerRadius = 12.dp
+                ) {
+                    AccentButton(
+                        onClick = {
+                            vibrate(context)
+                            showRgbDialog = true
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp)
+                            .border(if (isCustomSelected) 3.dp else 0.dp, if (isCustomSelected) selectedAccentColor else Color.Transparent, RoundedCornerShape(12.dp)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, tint = if (isCustomSelected) selectedAccentColor else TextWhite)
+                                Text(
+                                    text = stringResource(R.string.settings_custom_color),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextWhite
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .width(80.dp)
+                                    .height(24.dp)
+                                    .background(
+                                        color = if (isCustomSelected) selectedAccentColor else accentColor,
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+                            )
+                        }
+                    }
+                }
+            }
         }
         }
+    }
+
+    if (showRgbDialog) {
+        AlertDialog(
+            onDismissRequest = { showRgbDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.settings_custom_color),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                val currentColor = Color(customR, customG, customB)
+                val hexStr = String.format("#%02X%02X%02X", customR, customG, customB)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(64.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(currentColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color.Black.copy(alpha = 0.5f)
+                        ) {
+                            Text(
+                                text = hexStr,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Red", color = Color(0xFFFF5252), fontWeight = FontWeight.SemiBold)
+                            Text("$customR", fontWeight = FontWeight.Bold)
+                        }
+                        DolphySlider(
+                            value = customR.toFloat(),
+                            onValueChange = { customR = it.toInt().coerceIn(0, 255) },
+                            valueRange = 0f..255f,
+                            colors = SliderDefaults.colors(thumbColor = Color(0xFFFF5252), activeTrackColor = Color(0xFFFF5252))
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Green", color = Color(0xFF69F0AE), fontWeight = FontWeight.SemiBold)
+                            Text("$customG", fontWeight = FontWeight.Bold)
+                        }
+                        DolphySlider(
+                            value = customG.toFloat(),
+                            onValueChange = { customG = it.toInt().coerceIn(0, 255) },
+                            valueRange = 0f..255f,
+                            colors = SliderDefaults.colors(thumbColor = Color(0xFF69F0AE), activeTrackColor = Color(0xFF69F0AE))
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Blue", color = Color(0xFF448AFF), fontWeight = FontWeight.SemiBold)
+                            Text("$customB", fontWeight = FontWeight.Bold)
+                        }
+                        DolphySlider(
+                            value = customB.toFloat(),
+                            onValueChange = { customB = it.toInt().coerceIn(0, 255) },
+                            valueRange = 0f..255f,
+                            colors = SliderDefaults.colors(thumbColor = Color(0xFF448AFF), activeTrackColor = Color(0xFF448AFF))
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                DolphyButton(
+                    onClick = {
+                        vibrate(context)
+                        viewModel.setAdaptiveColor(false)
+                        viewModel.setAccentColor(Color(customR, customG, customB))
+                        showRgbDialog = false
+                    }
+                ) {
+                    Text(stringResource(R.string.color_picker_select))
+                }
+            },
+            dismissButton = {
+                DolphyTextButton(onClick = { showRgbDialog = false }) {
+                    Text(stringResource(R.string.btn_cancel))
+                }
+            }
+        )
     }
 }
 
@@ -3962,20 +4402,22 @@ fun ThemeModeScreen(viewModel: SpamViewModel, onNavigateBack: () -> Unit) {
                     accentColor = accentColor,
                     cornerRadius = 12.dp
                 ) {
-                    Row(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        DolphyIconButton(onClick = onNavigateBack) {
+                        DolphyIconButton(
+                            onClick = onNavigateBack,
+                            modifier = Modifier.align(Alignment.CenterStart)
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = accentColor)
                         }
                         Text(
                             text = stringResource(R.string.theme_selection_title),
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.padding(start = 8.dp)
+                            modifier = Modifier.align(Alignment.Center)
                         )
                     }
                 }
@@ -4276,7 +4718,7 @@ fun LevelUpAnimation(
 }
 
 @Composable
-fun DolphyScreen(viewModel: DolphyViewModel) {
+fun DolphyScreen(viewModel: DolphyViewModel, navController: NavController? = null) {
     val dolphyState by viewModel.dolphyState.collectAsState()
     var showInfoDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -4321,7 +4763,7 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = renameInput,
-                        onValueChange = { renameInput = it.replace("\n", "").take(10) },
+                        onValueChange = { renameInput = it.replace("\n", "").take(25) },
                         singleLine = true,
                         label = { Text(stringResource(R.string.passport_name_label)) },
                         shape = RoundedCornerShape(16.dp),
@@ -4453,18 +4895,38 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
                             color = accentColor,
                             fontWeight = FontWeight.Bold
                         )
-                        DolphyIconButton(
-                            onClick = { showInfoDialog = true },
-                            liquidTint = accentColor,
-                            modifier = Modifier.size(24.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                Icons.Filled.Info,
-                                contentDescription = "Stats",
-                                tint = if (isLiquidGlassChrome()) Color.Black
-                                else accentColor.copy(alpha = 0.6f),
-                                modifier = Modifier.size(18.dp)
-                            )
+                            if (dolphyState.level >= 50) {
+                                DolphyIconButton(
+                                    onClick = { navController?.navigate("customize_animations") },
+                                    liquidTint = accentColor,
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Star,
+                                        contentDescription = "Customize Animations",
+                                        tint = if (isLiquidGlassChrome()) Color.Black
+                                        else accentColor,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            DolphyIconButton(
+                                onClick = { showInfoDialog = true },
+                                liquidTint = accentColor,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Info,
+                                    contentDescription = "Stats",
+                                    tint = if (isLiquidGlassChrome()) Color.Black
+                                    else accentColor.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
 
@@ -4472,7 +4934,7 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.clickable {
-                            renameInput = dolphyState.dolphinName.take(10)
+                            renameInput = dolphyState.dolphinName.take(25)
                             showRenameDialog = true
                         }
                     ) {
@@ -4518,9 +4980,21 @@ fun DolphyScreen(viewModel: DolphyViewModel) {
 }
 fun vibrate(context: Context) {
     try {
-        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager)?.defaultVibrator
+                ?: (context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator)
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
         if (vibrator != null && vibrator.hasVibrator()) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                try {
+                    vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+                } catch (e: Throwable) {
+                    vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+                }
+            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
             } else {
                 @Suppress("DEPRECATION")
@@ -5351,8 +5825,12 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
     val cyclicDolphinAnimationEnabled: StateFlow<Boolean> = _cyclicDolphinAnimationEnabled
     private val _quickStartupEnabled = MutableStateFlow(prefs.getBoolean("quick_startup_enabled", false))
     val quickStartupEnabled: StateFlow<Boolean> = _quickStartupEnabled
+    private val _performanceModeEnabled = MutableStateFlow(prefs.getBoolean("performance_mode_enabled", false))
+    val performanceModeEnabled: StateFlow<Boolean> = _performanceModeEnabled
     private val _fabDestinationRoute = MutableStateFlow(prefs.getString("fab_destination_route", "other") ?: "other")
     val fabDestinationRoute: StateFlow<String> = _fabDestinationRoute
+    private val _fabEnabled = MutableStateFlow(prefs.getBoolean("fab_enabled", true))
+    val fabEnabled: StateFlow<Boolean> = _fabEnabled
 
     private val _hidTouchpadSensitivityMove = MutableStateFlow(prefs.getFloat("hid_touchpad_sensitivity_move", 1.5f))
     val hidTouchpadSensitivityMove: StateFlow<Float> = _hidTouchpadSensitivityMove
@@ -5365,6 +5843,71 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
 
     private val _spoofedName = MutableStateFlow(prefs.getString("spoofed_name", Build.MODEL) ?: Build.MODEL)
     val spoofedName: StateFlow<String> = _spoofedName
+
+    private val _functionsMenuViewType = MutableStateFlow(prefs.getInt("functions_menu_view_type", 0))
+    val functionsMenuViewType: StateFlow<Int> = _functionsMenuViewType
+
+    private val _functionsTileSize = MutableStateFlow(prefs.getFloat("functions_tile_size", 140f))
+    val functionsTileSize: StateFlow<Float> = _functionsTileSize
+
+    private val _appStyleMode = MutableStateFlow(prefs.getInt("app_style_mode", 0))
+    val appStyleMode: StateFlow<Int> = _appStyleMode
+
+    fun setAppStyleMode(mode: Int) {
+        prefs.edit { putInt("app_style_mode", mode) }
+        _appStyleMode.value = mode
+    }
+
+    private val _pinnedCardRoutes = MutableStateFlow(
+        prefs.getString("pinned_card_routes_list", "")
+            ?.split(",")
+            ?.filter { it.isNotBlank() } ?: emptyList()
+    )
+    val pinnedCardRoutes: StateFlow<List<String>> = _pinnedCardRoutes
+
+    fun togglePinCard(route: String) {
+        val current = _pinnedCardRoutes.value.toMutableList()
+        if (current.contains(route)) {
+            current.remove(route)
+        } else {
+            if (current.size < 4) {
+                current.add(route)
+            } else {
+                current.removeAt(current.size - 1)
+                current.add(route)
+            }
+        }
+        prefs.edit { putString("pinned_card_routes_list", current.joinToString(",")) }
+        _pinnedCardRoutes.value = current
+    }
+
+    fun unpinCard(route: String) {
+        val current = _pinnedCardRoutes.value.toMutableList()
+        current.remove(route)
+        prefs.edit { putString("pinned_card_routes_list", current.joinToString(",")) }
+        _pinnedCardRoutes.value = current
+    }
+
+    fun pinCard(route: String) {
+        val current = _pinnedCardRoutes.value.toMutableList()
+        if (!current.contains(route)) {
+            if (current.size >= 4) {
+                current.removeAt(current.size - 1)
+            }
+            current.add(route)
+            prefs.edit { putString("pinned_card_routes_list", current.joinToString(",")) }
+            _pinnedCardRoutes.value = current
+        }
+    }
+
+    fun recordCardUsage(route: String) {
+        val count = prefs.getInt("card_usage_$route", 0)
+        prefs.edit { putInt("card_usage_$route", count + 1) }
+    }
+
+    fun getCardUsage(route: String): Int {
+        return prefs.getInt("card_usage_$route", 0)
+    }
 
     fun completeOnboarding() {
         prefs.edit { putBoolean("onboarding_completed", true) }
@@ -5454,6 +5997,17 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
         _uiScale.value = stepped
     }
 
+    fun setFunctionsMenuViewType(type: Int) {
+        prefs.edit { putInt("functions_menu_view_type", type) }
+        _functionsMenuViewType.value = type
+    }
+
+    fun setFunctionsTileSize(size: Float) {
+        val clamped = size.coerceIn(100f, 200f)
+        prefs.edit { putFloat("functions_tile_size", clamped) }
+        _functionsTileSize.value = clamped
+    }
+
     fun setLiquidGlassEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("liquid_glass_enabled", false) }
         _liquidGlassEnabled.value = false
@@ -5502,9 +6056,41 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
         _quickStartupEnabled.value = enabled
     }
 
+    fun setPerformanceModeEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean("performance_mode_enabled", enabled) }
+        _performanceModeEnabled.value = enabled
+    }
+
+    /**
+     * On the very first launch, turns on performance mode automatically on
+     * low-end devices (system low-RAM flag or under ~4.5 GB of RAM). Runs
+     * once; afterwards the user's own choice in settings is authoritative.
+     */
+    fun maybeAutoEnablePerformanceMode() {
+        if (prefs.getBoolean("performance_mode_auto_applied", false)) return
+        prefs.edit { putBoolean("performance_mode_auto_applied", true) }
+        if (_performanceModeEnabled.value) return
+        val weakDevice = try {
+            val am = application.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val memoryInfo = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+            am.isLowRamDevice || memoryInfo.totalMem < 4_500_000_000L
+        } catch (e: Exception) {
+            false
+        }
+        if (weakDevice) {
+            setPerformanceModeEnabled(true)
+            DolphyToast.show(application.getString(R.string.settings_performance_mode_auto_enabled))
+        }
+    }
+
     fun setFabDestinationRoute(route: String) {
         prefs.edit { putString("fab_destination_route", route) }
         _fabDestinationRoute.value = route
+    }
+
+    fun setFabEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean("fab_enabled", enabled) }
+        _fabEnabled.value = enabled
     }
 
     fun setHidTouchpadSensitivityMove(value: Float) {

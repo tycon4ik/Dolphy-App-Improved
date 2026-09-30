@@ -258,12 +258,17 @@ class NrfScannerViewModel : ViewModel() {
         val isAppleDevice = manufacturerId == 0x004C
         val isSamsungDevice = manufacturerId == 0x0075
         val isXiaomiDevice = manufacturerId == 0x0157
+        val isVivoDevice = manufacturerId == 0x0837 ||
+            serviceUuids.any {
+                it.equals("00008486-0000-1000-8000-00805f9b34fb", ignoreCase = true) ||
+                    it.equals("00000837-0000-1000-8000-00805f9b34fb", ignoreCase = true)
+            }
 
-        val isVulnerable = isFastPair || isWhisperPair || isAppleDevice || isSamsungDevice || isXiaomiDevice
+        val isVulnerable = isFastPair || isWhisperPair || isAppleDevice || isSamsungDevice || isXiaomiDevice || isVivoDevice
         val vulnerabilityType = when {
             isFastPair -> VulnerabilityType.FAST_PAIR_KBP
             isWhisperPair -> VulnerabilityType.WHISPER_PAIR
-            isAppleDevice || isSamsungDevice || isXiaomiDevice -> VulnerabilityType.STANDARD_PAIRING
+            isAppleDevice || isSamsungDevice || isXiaomiDevice || isVivoDevice -> VulnerabilityType.STANDARD_PAIRING
             else -> VulnerabilityType.NONE
         }
 

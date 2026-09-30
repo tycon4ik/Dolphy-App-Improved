@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lan
+import androidx.compose.material.icons.filled.LinkedCamera
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Print
@@ -92,6 +94,12 @@ fun LanToolsScreen(navController: NavController) {
             stringResource(R.string.lan_tools_item_cameras),
             stringResource(R.string.lan_tools_item_cameras_desc),
             "other/lan_camera_scan",
+        ),
+        LanToolEntry(
+            Icons.Default.LinkedCamera,
+            stringResource(R.string.my_cam_title),
+            stringResource(R.string.my_cam_entry_desc),
+            "other/my_cam",
         ),
         LanToolEntry(
             Icons.Default.Print,

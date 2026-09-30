@@ -35,7 +35,9 @@ class BluetoothAdvertiser {
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun advertise(
         advertiseData: AdvertiseData,
-        scanResponse: AdvertiseData? = null
+        scanResponse: AdvertiseData? = null,
+        forceLegacy: Boolean = false,
+        connectable: Boolean = false
     ) {
         val pluginDecision = PluginBluetoothHooks.interceptAdvertising(
             advertiseData,
@@ -45,17 +47,17 @@ class BluetoothAdvertiser {
         if (pluginDecision.skipNative) return
         val effectiveData = pluginDecision.advertiseData
         val effectiveScanResponse = pluginDecision.scanResponse
-        if (Helper.canUseExtendedAdvertising()) {
+        if (!forceLegacy && Helper.canUseExtendedAdvertising()) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                advertiseExtended(effectiveData)
+                advertiseExtended(effectiveData, connectable)
                 return
             }
         }
-        advertiseLegacy(effectiveData, effectiveScanResponse)
+        advertiseLegacy(effectiveData, effectiveScanResponse, connectable)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
-    private fun advertiseLegacy(advertiseData: AdvertiseData, scanResponse: AdvertiseData?) {
+    private fun advertiseLegacy(advertiseData: AdvertiseData, scanResponse: AdvertiseData?, connectable: Boolean = false) {
         val adv = advertiser ?: run {
             Helper.log("BluetoothLeAdvertiser is null")
             return
@@ -63,7 +65,7 @@ class BluetoothAdvertiser {
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(false)
+            .setConnectable(connectable)
             .setTimeout(0)
             .build()
         try {
@@ -78,7 +80,7 @@ class BluetoothAdvertiser {
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
-    private fun advertiseExtended(advertiseData: AdvertiseData) {
+    private fun advertiseExtended(advertiseData: AdvertiseData, connectable: Boolean = false) {
         val adv = advertiser ?: run {
             Helper.log("BluetoothLeAdvertiser is null (extended)")
             return
@@ -88,7 +90,7 @@ class BluetoothAdvertiser {
             .setLegacyMode(false)
             .setInterval(AdvertisingSetParameters.INTERVAL_MIN)
             .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH)
-            .setConnectable(false)
+            .setConnectable(connectable)
             .setScannable(false)
             .setPrimaryPhy(BluetoothDevice.PHY_LE_1M)
             .setSecondaryPhy(BluetoothDevice.PHY_LE_1M)

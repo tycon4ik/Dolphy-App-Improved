@@ -3,9 +3,14 @@ package com.droid.dolphy.bluetooth.whisperpair
 import com.droid.dolphy.DolphyIconButton
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -37,6 +42,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
@@ -74,7 +80,12 @@ import androidx.navigation.NavController
 import com.droid.dolphy.MaterialBackground
 import com.droid.dolphy.R
 
-private enum class Screen { Scanner, Paired, Recordings }
+private enum class Screen { Scanner, Paired, Recordings, Tws }
+
+private data class TwsTarget(val name: String?, val address: String, val rssi: Int) {
+    val displayName: String
+        get() = name ?: "Неизвестное устройство"
+}
 
 data class AudioConnectionState(
     val isConnected: Boolean = false,
@@ -220,6 +231,13 @@ fun WhisperPairBluetoothScreen(navController: NavController) {
                         )
 
                         Screen.Recordings -> RecordingsTab(PaddingValues(horizontal = 16.dp, vertical = 10.dp))
+
+                        Screen.Tws -> TwsTab(
+                            context = context,
+                            exploitResults = exploitResults,
+                            onStatus = { address, msg -> exploitResults[address] = msg },
+                            paddingValues = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                        )
                     }
                 }
             }
@@ -265,6 +283,12 @@ private fun TopTabs(currentScreen: Screen, onSelect: (Screen) -> Unit) {
             icon = Icons.Default.LibraryMusic,
             selected = currentScreen == Screen.Recordings,
             onClick = { onSelect(Screen.Recordings) }
+        )
+        TabButton(
+            modifier = Modifier.weight(1f),
+            icon = Icons.Default.GraphicEq,
+            selected = currentScreen == Screen.Tws,
+            onClick = { onSelect(Screen.Tws) }
         )
     }
 }
@@ -495,6 +519,214 @@ private fun RecordingsTab(paddingValues: PaddingValues) {
             stringResource(R.string.whisperpair_records),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@SuppressLint("MissingPermission")
+@Composable
+private fun TwsTab(
+    context: Context,
+    exploitResults: Map<String, String>,
+    onStatus: (String, String) -> Unit,
+    paddingValues: PaddingValues
+) {
+    val engine = remember { TwsHijackEngine(context) }
+    val devices = remember { mutableStateListOf<TwsTarget>() }
+    var isScanning by remember { mutableStateOf(false) }
+    var activeTarget by remember { mutableStateOf<String?>(null) }
+
+    val permissions = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.RECORD_AUDIO
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.BLUETOOTH,
+                Manifest.permission.BLUETOOTH_ADMIN,
+                Manifest.permission.RECORD_AUDIO
+            )
+        }
+    }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result.values.all { it }) isScanning = true
+    }
+
+    DisposableEffect(Unit) { onDispose { engine.stop() } }
+
+    DisposableEffect(isScanning) {
+        var receiver: BroadcastReceiver? = null
+        if (isScanning) {
+            val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+            if (adapter?.isEnabled == true) {
+                receiver = object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context, intent: Intent) {
+                        when (intent.action) {
+                            BluetoothDevice.ACTION_FOUND -> {
+                                val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                                }
+                                device?.let {
+                                    if (devices.none { d -> d.address == it.address }) {
+                                        val rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE).toInt()
+                                        devices.add(TwsTarget(it.name, it.address, rssi))
+                                    }
+                                }
+                            }
+                            BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> isScanning = false
+                        }
+                    }
+                }
+                ContextCompat.registerReceiver(
+                    context,
+                    receiver!!,
+                    IntentFilter().apply {
+                        addAction(BluetoothDevice.ACTION_FOUND)
+                        addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+                    },
+                    ContextCompat.RECEIVER_EXPORTED
+                )
+                runCatching { adapter.startDiscovery() }
+            } else {
+                isScanning = false
+            }
+        }
+        onDispose {
+            receiver?.let { runCatching { context.unregisterReceiver(it) } }
+            runCatching {
+                (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter?.cancelDiscovery()
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(paddingValues)
+    ) {
+        Text(
+            stringResource(R.string.whisperpair_tws_title),
+            color = androidx.compose.ui.graphics.Color.White,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            stringResource(R.string.whisperpair_tws_hint),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(12.dp))
+
+        if (isScanning) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Bluetooth,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    stringResource(R.string.whisperpair_tws_scanning),
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.droid.dolphy.AccentButton(
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    if (!isScanning) {
+                        val has = permissions.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+                        val bluetoothEnabled = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter?.isEnabled == true
+                        if (!has) {
+                            launcher.launch(permissions)
+                        } else if (bluetoothEnabled) {
+                            devices.clear()
+                            isScanning = true
+                        }
+                    } else {
+                        isScanning = false
+                    }
+                }
+            ) {
+                Icon(if (isScanning) Icons.Default.Stop else Icons.Default.PlayArrow, null)
+                Spacer(Modifier.size(6.dp))
+                Text(if (isScanning) stringResource(R.string.whisperpair_stop) else stringResource(R.string.scan))
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
+        if (devices.isEmpty() && !isScanning) {
+            Text(
+                stringResource(R.string.whisperpair_tws_empty),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp
+            )
+        }
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 120.dp)
+        ) {
+            items(devices.sortedByDescending { it.rssi }, key = { it.address }) { device ->
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(
+                            device.displayName,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(device.address, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        if (device.rssi != Short.MIN_VALUE.toInt()) {
+                            Text("RSSI: ${device.rssi}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                        exploitResults[device.address]?.let {
+                            Text(
+                                it,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        com.droid.dolphy.AccentButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                if (activeTarget == device.address) {
+                                    engine.stop()
+                                    activeTarget = null
+                                    onStatus(device.address, context.getString(R.string.whisperpair_tws_stopped))
+                                } else {
+                                    engine.stop()
+                                    onStatus(device.address, context.getString(R.string.whisperpair_connecting))
+                                    engine.hijack(device.address) { msg -> onStatus(device.address, msg) }
+                                    activeTarget = device.address
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.GraphicEq, contentDescription = null)
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                if (activeTarget == device.address) stringResource(R.string.whisperpair_stop)
+                                else stringResource(R.string.whisperpair_intercept)
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

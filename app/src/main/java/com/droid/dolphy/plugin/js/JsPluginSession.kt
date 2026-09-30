@@ -11,6 +11,7 @@ import com.droid.dolphy.ContinuityMode
 import com.droid.dolphy.ContinuityType
 import com.droid.dolphy.EasySetupDevice
 import com.droid.dolphy.SpamType
+import com.droid.dolphy.VivoDevice
 import com.droid.dolphy.plugin.PluginLibraryRegistry
 import com.droid.dolphy.plugin.PluginRegistry
 import com.droid.dolphy.plugin.PluginSession
@@ -2208,6 +2209,7 @@ class JsPluginSession(
                 if (BleSpamRuntime.isSectionActive(BleSection.ANDROID)) active += "android"
                 if (BleSpamRuntime.isSectionActive(BleSection.WINDOWS)) active += "windows"
                 if (BleSpamRuntime.isSectionActive(BleSection.XIAOMI)) active += "xiaomi"
+                if (BleSpamRuntime.isSectionActive(BleSection.VIVO)) active += "vivo"
                 if (BleSpamRuntime.isSectionActive(BleSection.PHANTOM)) active += "phantom"
                 if (BleSpamRuntime.kitchenSinkActive.value) active += "all"
                 org.json.JSONArray(active).toString()
@@ -2230,6 +2232,7 @@ class JsPluginSession(
                     "fast_pair", "fastpair", "android" -> SpamType.FAST_PAIR
                     "swift_pair", "swiftpair", "windows" -> SpamType.SWIFT_PAIR
                     "xiaomi" -> SpamType.XIAOMI
+                    "vivo", "vivotws", "vivo_tws", "vivo_tws_pro", "iqoo" -> SpamType.VIVO
                     "phantom" -> SpamType.PHANTOM
                     else -> return@put false
                 }
@@ -2251,13 +2254,20 @@ class JsPluginSession(
                             else -> EasySetupDevice.Type.BUDS
                         }
                     }
+                    SpamType.VIVO -> {
+                        val sub = (map["subtype"] ?: args.getOrNull(1))?.toString()?.lowercase()
+                        when (sub) {
+                            "gamepad", "pad", "hid", "controller", "iqoo" -> VivoDevice.Type.GAMEPAD
+                            else -> VivoDevice.Type.TWS
+                        }
+                    }
                     else -> null
                 }
                 BleSpamRuntime.toggleBleSpam(spamType, subtype)
                 true
             }
             put("sections") {
-                """["apple","samsung","android","xiaomi","windows","phantom","all"]"""
+                """["apple","samsung","android","xiaomi","vivo","windows","phantom","all"]"""
             }
         })
 
@@ -2504,6 +2514,7 @@ class JsPluginSession(
             "samsung", "easysetup", "easy_setup", "buds", "galaxy" -> BleSection.SAMSUNG
             "android", "fastpair", "fast_pair", "google" -> BleSection.ANDROID
             "xiaomi", "mi", "quickconnect" -> BleSection.XIAOMI
+            "vivo", "vivotws", "vivo_tws", "iqoo" -> BleSection.VIVO
             "windows", "swiftpair", "swift_pair", "ms", "microsoft" -> BleSection.WINDOWS
             "phantom" -> BleSection.PHANTOM
             else -> null

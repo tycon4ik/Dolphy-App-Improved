@@ -156,6 +156,7 @@ object BleSpamRuntime {
             SpamType.FAST_PAIR -> FastPairSpam()
             SpamType.SWIFT_PAIR -> SwiftPairSpam()
             SpamType.XIAOMI -> XiaomiQuickConnect()
+            SpamType.VIVO -> VivoSpam(subtype as? VivoDevice.Type ?: VivoDevice.Type.TWS)
             SpamType.PHANTOM -> BluetoothPhantomSpammer()
         }
     }
@@ -166,7 +167,9 @@ object BleSpamRuntime {
                 Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.DEVICE, false)),
                 Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.NOTYOURDEVICE, false)),
                 Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.ACTION, false)),
-                Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.ACTION, true))
+                Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.ACTION, true)),
+                Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.ICLOUD_SPOOF, false)),
+                Pair(SpamType.CONTINUITY, ContinuityMode(ContinuityType.NEARBY_INFO, false))
             )
             BleSection.SAMSUNG -> listOf(
                 Pair(SpamType.EASY_SETUP, EasySetupDevice.Type.WATCH),
@@ -175,6 +178,10 @@ object BleSpamRuntime {
             BleSection.ANDROID -> listOf(Pair(SpamType.FAST_PAIR, null))
             BleSection.WINDOWS -> listOf(Pair(SpamType.SWIFT_PAIR, null))
             BleSection.XIAOMI -> listOf(Pair(SpamType.XIAOMI, null))
+            BleSection.VIVO -> listOf(
+                Pair(SpamType.VIVO, VivoDevice.Type.TWS),
+                Pair(SpamType.VIVO, VivoDevice.Type.GAMEPAD)
+            )
             BleSection.PHANTOM -> listOf(Pair(SpamType.PHANTOM, null))
         }
     }
@@ -209,6 +216,7 @@ object BleSpamRuntime {
         if (isSectionActive(BleSection.ANDROID)) activeSections += "Android"
         if (isSectionActive(BleSection.WINDOWS)) activeSections += "Windows"
         if (isSectionActive(BleSection.XIAOMI)) activeSections += "Xiaomi"
+        if (isSectionActive(BleSection.VIVO)) activeSections += "Vivo"
         if (isSectionActive(BleSection.PHANTOM)) activeSections += "Phantom"
         if (_kitchenSinkActive.value) activeSections += "Kitchen sink"
 

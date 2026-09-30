@@ -7,6 +7,31 @@
     <string name="nav_bluetooth">Bluetooth</string>
     <string name="nav_modules">Functions</string>
     <string name="settings_personalisation">Personalisation</string>
+    <string name="settings_functions_menu_view">Function menu view</string>
+    <string name="settings_functions_menu_containers">Containers</string>
+    <string name="settings_functions_menu_tiles">Tiles</string>
+    <string name="settings_functions_tile_size">Tile size</string>
+    <string name="settings_app_style">Style</string>
+    <string name="settings_app_style_old">Standard</string>
+    <string name="settings_app_style_new">Compact</string>
+    <string name="usb_ir_connected_title">IR module connected</string>
+    <string name="usb_ir_connected_desc">External USB-C IR module is ready to transmit commands</string>
+    <string name="dont_show_again">Don\'t show again</string>
+    <string name="settings_custom_color">Custom color</string>
+    <string name="color_picker_select">Select</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="action_pin">Pin</string>
+    <string name="action_unpin">Unpin</string>
+    <string name="action_info">Info</string>
+    <string name="section_recommended">Recommended</string>
+    <string name="section_pinned">Pinned</string>
+    <string name="section_all_functions">All Functions</string>
+    <string name="bond_spam_title">Bond Spam</string>
+    <string name="bond_spam_devices">Discovered Devices</string>
+    <string name="bond_spam_no_devices">Searching for devices…</string>
+    <string name="bond_spam_target">Target:</string>
+    <string name="bond_spam_select_device">Select a device for spam</string>
+    <string name="ble_spam_screen_title">BLE Spam</string>
     <string name="settings_bottom_panel">Bottom panel</string>
     <string name="settings_fab_summary">Action opened by the central bottom-panel button</string>
     <string name="settings_fab_choose">Choose a FAB action</string>
@@ -50,7 +75,7 @@
     <string name="passport_level_up_pending">Level up pending</string>
     <string name="passport_rename_title">Rename</string>
     <string name="passport_name_label">Name</string>
-    <string name="passport_name_limit_hint">Up to 10 characters</string>
+    <string name="passport_name_limit_hint">Up to 25 characters</string>
     
     
     <string name="mood_happy">Happy</string>
@@ -73,6 +98,8 @@
     <string name="ble_list_watch">Watch List</string>
     <string name="ble_list_fast_pair">Fast Pair List</string>
     <string name="ble_list_xiaomi">Xiaomi Quick Connect</string>
+    <string name="ble_list_vivo_tws">Vivo TWS List</string>
+    <string name="ble_list_vivo_gamepad">Vivo Gamepad List</string>
     <string name="ble_list_normal">Normal List</string>
     <string name="ble_list_headphones">Headphones List</string>
     
@@ -110,6 +137,9 @@
     <string name="bt_jammer_activity_log">ACTIVITY LOG</string>
     <string name="bt_jammer_target">TARGET</string>
     <string name="settings_quick_startup">Quick Startup</string>
+    <string name="settings_performance_mode">Performance Mode</string>
+    <string name="settings_performance_mode_summary">Disables blur, animated background and heavy effects for low-end devices</string>
+    <string name="settings_performance_mode_auto_enabled">Performance mode enabled for this device — you can turn it off in settings</string>
 
 
     
@@ -855,6 +885,20 @@
     <string name="lan_tools_item_scanner_desc">Discover devices on the current Wi-Fi network</string>
     <string name="lan_tools_item_cameras">Camera search</string>
     <string name="lan_tools_item_cameras_desc">ONVIF and IP camera ports</string>
+    <string name="my_cam_title">CamCatch</string>
+    <string name="my_cam_entry_desc">Live feed from your home camera (admin/admin)</string>
+    <string name="my_cam_status_searching">Searching for devices</string>
+    <string name="my_cam_status_requesting">Request to %1$s…</string>
+    <string name="my_cam_status_checking">Success! Checking password…</string>
+    <string name="my_cam_status_no_reply">No response to request</string>
+    <string name="my_cam_status_next_device">Moving to another device</string>
+    <string name="my_cam_log_no_video">Could not get video from the cameras found</string>
+    <string name="my_cam_error_title">Error</string>
+    <string name="my_cam_no_cameras">No cameras on the network</string>
+    <string name="my_cam_log_title">Log</string>
+    <string name="my_cam_retry">Try again</string>
+    <string name="my_cam_retry_all">Try all devices on the network</string>
+    <string name="my_cam_live_label">Live</string>
     <string name="lan_camera_title">Camera search</string>
     <string name="lan_camera_description">Checking your network for cameras.</string>
     <string name="lan_camera_start">Start</string>
@@ -1082,4 +1126,14 @@
     <string name="scooter_lock">Lock</string>
     <string name="scooter_unlock">Unlock</string>
     <string name="scooter_perm_denied">Bluetooth and location permissions are required</string>
+
+    <!-- Dolphin Animations Customization -->
+    <string name="customize_animations_title">Customize animations</string>
+    <string name="customize_animations_reset">Reset</string>
+    <string name="customize_animations_dialog_title">Set animation as permanent on home screen?</string>
+    <string name="customize_animations_dialog_yes">Yes</string>
+    <string name="customize_animations_dialog_no">No</string>
+    <string name="customize_animations_permanent_badge">Permanent</string>
+    <string name="customize_animations_set_success">Animation set as permanent on home screen</string>
+    <string name="customize_animations_reset_success">Animation reset to standard mode</string>
 </resources>

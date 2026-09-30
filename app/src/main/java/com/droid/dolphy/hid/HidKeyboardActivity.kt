@@ -302,8 +302,9 @@ class HidKeyboardActivity : ComponentActivity(), KeyboardService.Listener {
         val flipperFontEnabled = settingsPrefs.getBoolean("flipper_font_enabled", true)
         val flipperFontScale = settingsPrefs.getFloat("flipper_font_scale", 1.08f)
         val uiScale = settingsPrefs.getFloat("ui_scale", 1f).coerceIn(0.8f, 1.2f)
-        val animatedBackgroundEnabled = settingsPrefs.getBoolean("animated_background_enabled", false)
-        val expressiveEnabled = settingsPrefs.getBoolean("md3_expressive", false)
+        val performanceModeEnabled = settingsPrefs.getBoolean("performance_mode_enabled", false)
+        val animatedBackgroundEnabled = settingsPrefs.getBoolean("animated_background_enabled", false) && !performanceModeEnabled
+        val expressiveEnabled = settingsPrefs.getBoolean("md3_expressive", false) && !performanceModeEnabled
         val themeMode = settingsPrefs.getInt("theme_mode", 0)
         val isDarkTheme = when (themeMode) {
             1 -> true

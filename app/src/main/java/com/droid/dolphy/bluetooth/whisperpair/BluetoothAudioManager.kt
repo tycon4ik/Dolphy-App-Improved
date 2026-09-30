@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -30,6 +31,7 @@ class BluetoothAudioManager(private val context: Context) {
         private const val TAG = "BluetoothAudioManager"
         private const val SAMPLE_RATE = 16000
         private const val BUFFER_SIZE_FACTOR = 2
+        private const val SCO_OPEN_TIMEOUT_MS = 6000L
     }
 
     sealed class AudioState {
@@ -75,6 +77,11 @@ class BluetoothAudioManager(private val context: Context) {
 
     private var scoReceiver: BroadcastReceiver? = null
     private var profileListener: BluetoothProfile.ServiceListener? = null
+
+    @Volatile private var scoConnected = false
+    private var scoWaitCallback: ((Boolean) -> Unit)? = null
+    private var scoWaitTimeout: Runnable? = null
+    private var commDeviceListener: AudioManager.OnCommunicationDeviceChangedListener? = null
 
     private val lock = Object()
 
@@ -236,32 +243,31 @@ class BluetoothAudioManager(private val context: Context) {
         try {
             am.mode = AudioManager.MODE_IN_COMMUNICATION
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val scoDevice = am.availableCommunicationDevices.find {
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            openScoChannel(am) { scoOpened ->
+                if (!scoOpened) {
+                    onStateChange(AudioState.Error("SCO channel not opened"))
+                    return@openScoChannel
                 }
-                if (scoDevice != null) {
-                    am.setCommunicationDevice(scoDevice)
-                } else {
-                    Log.w(TAG, "No Bluetooth SCO device available")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val scoDevice = am.availableCommunicationDevices.find {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    }
+                    if (scoDevice != null) {
+                        am.setCommunicationDevice(scoDevice)
+                    }
                 }
-            } else {
-                @Suppress("DEPRECATION")
-                am.startBluetoothSco()
-                @Suppress("DEPRECATION")
-                am.isBluetoothScoOn = true
+
+                Log.d(TAG, "SCO connection ready for recording")
+
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val pcmFile = File(outputDir, "whisper_${timestamp}.pcm")
+                val m4aFile = File(outputDir, "whisper_${timestamp}.m4a")
+                recordingFile = m4aFile
+
+                handler.postDelayed({
+                    startAudioCapture(pcmFile, m4aFile, onStateChange)
+                }, 300)
             }
-
-            Log.d(TAG, "SCO connection requested for recording")
-
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val pcmFile = File(outputDir, "whisper_${timestamp}.pcm")
-            val m4aFile = File(outputDir, "whisper_${timestamp}.m4a")
-            recordingFile = m4aFile
-
-            handler.postDelayed({
-                startAudioCapture(pcmFile, m4aFile, onStateChange)
-            }, 1000)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error starting SCO for recording", e)
@@ -470,6 +476,8 @@ class BluetoothAudioManager(private val context: Context) {
     fun stopRecording() {
         isRecording = false
         safeStopRecording()
+        finishScoWait(false)
+        stopSco()
     }
 
     private fun safeStopRecording() {
@@ -520,27 +528,133 @@ class BluetoothAudioManager(private val context: Context) {
         try {
             am.mode = AudioManager.MODE_IN_COMMUNICATION
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val scoDevice = am.availableCommunicationDevices.find {
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            openScoChannel(am) { scoOpened ->
+                if (!scoOpened) {
+                    onStateChange(AudioState.Error("SCO channel not opened"))
+                    return@openScoChannel
                 }
-                if (scoDevice != null) {
-                    am.setCommunicationDevice(scoDevice)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val scoDevice = am.availableCommunicationDevices.find {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    }
+                    if (scoDevice != null) {
+                        am.setCommunicationDevice(scoDevice)
+                    }
                 }
-            } else {
-                @Suppress("DEPRECATION")
-                am.startBluetoothSco()
-                @Suppress("DEPRECATION")
-                am.isBluetoothScoOn = true
-            }
-
-            handler.postDelayed({
                 startAudioPassthrough(onStateChange)
-            }, 1000)
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error starting listening", e)
             onStateChange(AudioState.Error("Listen error: ${e.message}"))
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openScoChannel(am: AudioManager, onResult: (Boolean) -> Unit) {
+        @Suppress("DEPRECATION")
+        if (scoConnected || am.isBluetoothScoOn) {
+            onResult(true)
+            return
+        }
+
+        scoWaitCallback = onResult
+        scoWaitTimeout = Runnable {
+            val cb = scoWaitCallback
+            scoWaitCallback = null
+            if (cb != null) {
+                @Suppress("DEPRECATION")
+                val scoOn = scoConnected || am.isBluetoothScoOn ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        am.communicationDevice?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+                Log.w(TAG, "SCO open timeout, connected=$scoOn")
+                cb(scoOn)
+            }
+        }
+        handler.postDelayed(scoWaitTimeout!!, SCO_OPEN_TIMEOUT_MS)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val listener = AudioManager.OnCommunicationDeviceChangedListener { device ->
+                    if (device?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
+                        Log.d(TAG, "Communication device switched to BT SCO")
+                        scoConnected = true
+                        finishScoWait(true)
+                    }
+                }
+                commDeviceListener = listener
+                am.addOnCommunicationDeviceChangedListener(
+                    ContextCompat.getMainExecutor(context), listener
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "addOnCommunicationDeviceChangedListener error", e)
+            }
+        }
+
+        val headset = headsetProfile
+        val device = targetDevice
+
+        if (headset != null && device != null) {
+            try {
+                if (headset.startVoiceRecognition(device)) {
+                    Log.d(TAG, "Voice recognition started, waiting for SCO...")
+                    return
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "startVoiceRecognition error", e)
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                am.javaClass.getMethod("startScoUsingVirtualCall").invoke(am)
+                Log.d(TAG, "startScoUsingVirtualCall called, waiting for SCO...")
+                return
+            } catch (e: Exception) {
+                Log.e(TAG, "startScoUsingVirtualCall error", e)
+            }
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            @Suppress("DEPRECATION")
+            am.startBluetoothSco()
+            Log.d(TAG, "startBluetoothSco called, waiting for SCO...")
+        } else {
+            finishScoWait(false)
+        }
+    }
+
+    private fun finishScoWait(connected: Boolean) {
+        scoWaitTimeout?.let { handler.removeCallbacks(it) }
+        scoWaitTimeout = null
+        val cb = scoWaitCallback
+        scoWaitCallback = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            commDeviceListener?.let { listener ->
+                commDeviceListener = null
+                runCatching { audioManager?.removeOnCommunicationDeviceChangedListener(listener) }
+            }
+        }
+        cb?.invoke(connected)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopSco() {
+        val am = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                am.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION")
+                am.stopBluetoothSco()
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                runCatching { am.javaClass.getMethod("stopScoUsingVirtualCall").invoke(am) }
+                    .onFailure { Log.e(TAG, "stopScoUsingVirtualCall error", it) }
+            }
+            scoConnected = false
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping SCO", e)
         }
     }
 
@@ -683,6 +797,8 @@ class BluetoothAudioManager(private val context: Context) {
     fun stopListening() {
         isListening = false
         safeStopListening()
+        finishScoWait(false)
+        stopSco()
     }
 
     private fun safeStopListening() {
@@ -748,21 +864,15 @@ class BluetoothAudioManager(private val context: Context) {
 
         safeStopRecording()
         safeStopListening()
+        finishScoWait(false)
+        stopSco()
 
         val am = audioManager
         if (am != null) {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    am.clearCommunicationDevice()
-                } else {
-                    @Suppress("DEPRECATION")
-                    am.stopBluetoothSco()
-                    @Suppress("DEPRECATION")
-                    am.isBluetoothScoOn = false
-                }
                 am.mode = AudioManager.MODE_NORMAL
             } catch (e: Exception) {
-                Log.e(TAG, "Error stopping SCO", e)
+                Log.e(TAG, "Error resetting audio mode", e)
             }
         }
 
@@ -833,9 +943,12 @@ class BluetoothAudioManager(private val context: Context) {
                                 when (state) {
                                     AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
                                         Log.d(TAG, "SCO audio connected")
+                                        scoConnected = true
+                                        finishScoWait(true)
                                     }
                                     AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> {
                                         Log.d(TAG, "SCO audio disconnected")
+                                        scoConnected = false
                                         if (isRecording) {
                                             stopRecording()
                                             stateCallback?.invoke(AudioState.Error("SCO disconnected"))
@@ -884,7 +997,7 @@ class BluetoothAudioManager(private val context: Context) {
                 addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
                 addAction(BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED)
             }
-            context.registerReceiver(scoReceiver, filter)
+            ContextCompat.registerReceiver(context, scoReceiver, filter, ContextCompat.RECEIVER_EXPORTED)
         } catch (e: Exception) {
             Log.e(TAG, "Error registering SCO receiver", e)
         }

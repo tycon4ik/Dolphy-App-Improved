@@ -9,3 +9,6 @@
 *.keystore
 *.pk8
 *.pem
+.cxx/
+**/app/.cxx/
+/plugin-test-suite/

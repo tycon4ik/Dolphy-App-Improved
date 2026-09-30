@@ -35,3 +35,9 @@
 
 -keep class com.droid.dolphy.plugin.** { *; }
 -keep class androidx.compose.material.icons.** { *; }
+
+-keep class com.droid.dolphy.** { *; }
+-dontwarn com.droid.dolphy.**
+
+-keep class com.chaquo.python.** { *; }
+-dontwarn com.chaquo.python.**

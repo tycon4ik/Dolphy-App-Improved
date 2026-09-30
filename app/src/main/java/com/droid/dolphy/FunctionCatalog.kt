@@ -22,6 +22,9 @@ data class FunctionDestination(
     val route: String,
     val section: String,
     val requiresRoot: Boolean = false,
+    val isPlugin: Boolean = false,
+    val pluginId: String = "",
+    val screenId: String = "",
 )
 
 @Composable
@@ -30,48 +33,82 @@ fun functionDestinationSections(): List<Pair<String, List<FunctionDestination>>>
     val pluginCards by PluginRegistry.otherCards.collectAsState()
     val bySection = androidx.compose.runtime.remember(revision, pluginCards) { PluginRegistry.otherBySection() }
 
-    fun plugins(section: String): List<FunctionDestination> {
-        return bySection[section].orEmpty().map { card ->
-            FunctionDestination(
-                icon = PluginIcons.resolve(card.icon),
-                title = card.title,
-                description = card.description,
-                route = "plugin/${card.pluginId}/${card.screenId}",
-                section = section,
-            )
+    val irFlipperTitle = stringResource(R.string.ir_flipper_remotes)
+    val irFlipperDesc = stringResource(R.string.other_ir_flipper_desc) + " + Телевизоры"
+    val irStormTitle = stringResource(R.string.ir_storm)
+    val irStormDesc = stringResource(R.string.other_ir_storm_desc)
+    val irJammerTitle = stringResource(R.string.ir_jammer)
+    val irJammerDesc = stringResource(R.string.other_ir_jammer_desc)
+    val irUnivTitle = stringResource(R.string.ir_universal_remotes)
+    val irUnivDesc = stringResource(R.string.other_ir_universal_desc)
+
+    val audioScanTitle = stringResource(R.string.audio_scanner_title)
+    val audioScanDesc = stringResource(R.string.audio_scanner_desc)
+    val scooterTitle = stringResource(R.string.scooter_hack_title)
+    val scooterDesc = stringResource(R.string.scooter_hack_card_desc)
+    val nrfDesc = stringResource(R.string.nrf_scanner_description)
+    val chatDesc = stringResource(R.string.other_dolphy_chat_desc)
+    val hidTitle = stringResource(R.string.other_hid)
+    val hidDesc = stringResource(R.string.other_hid_desc)
+
+    val nfcTitle = stringResource(R.string.other_nfc)
+    val nfcDesc = stringResource(R.string.other_nfc_desc)
+    val qrTitle = stringResource(R.string.other_qr_tools)
+    val qrDesc = stringResource(R.string.other_qr_tools_desc)
+    val netHubDesc = stringResource(R.string.network_hub_card_description)
+    val tvCastTitle = stringResource(R.string.smarttv_cast_title)
+    val tvCastDesc = stringResource(R.string.smarttv_cast_card_description)
+    val lanTitle = stringResource(R.string.lan_tools_title)
+    val lanDesc = stringResource(R.string.lan_tools_subtitle)
+
+    return androidx.compose.runtime.remember(bySection, irFlipperTitle) {
+        fun plugins(section: String): List<FunctionDestination> {
+            return bySection[section].orEmpty().map { card ->
+                FunctionDestination(
+                    icon = PluginIcons.resolve(card.icon),
+                    title = card.title,
+                    description = card.description,
+                    route = "plugin/${card.pluginId}/${card.screenId}",
+                    section = section,
+                    isPlugin = true,
+                    pluginId = card.pluginId,
+                    screenId = card.screenId,
+                )
+            }
         }
-    }
 
-    val sections = mutableListOf<Pair<String, List<FunctionDestination>>>()
-    sections += OtherSections.INFRARED to listOf(
-        FunctionDestination(Icons.Default.Computer, stringResource(R.string.ir_flipper_remotes), stringResource(R.string.other_ir_flipper_desc) + " + Телевизоры", "other/ir_flipper_home", OtherSections.INFRARED),
-        FunctionDestination(Icons.Default.Warning, stringResource(R.string.ir_storm), stringResource(R.string.other_ir_storm_desc), "other/ir_storm", OtherSections.INFRARED),
-        FunctionDestination(Icons.Default.WifiTethering, stringResource(R.string.ir_jammer), stringResource(R.string.other_ir_jammer_desc), "other/ir_jammer", OtherSections.INFRARED),
-        FunctionDestination(Icons.Default.Tv, stringResource(R.string.ir_universal_remotes), stringResource(R.string.other_ir_universal_desc), "other/universal_remotes_home", OtherSections.INFRARED),
-    ) + plugins(OtherSections.INFRARED)
-    sections += OtherSections.BLUETOOTH to listOf(
-        FunctionDestination(Icons.Default.BluetoothAudio, stringResource(R.string.audio_scanner_title), stringResource(R.string.audio_scanner_desc), "other/audio_scanner", OtherSections.BLUETOOTH),
-        FunctionDestination(Icons.Default.ElectricScooter, stringResource(R.string.scooter_hack_title), stringResource(R.string.scooter_hack_card_desc), "other/scooter_hack", OtherSections.BLUETOOTH),
-        FunctionDestination(Icons.Default.Bluetooth, "NRF Scanner", stringResource(R.string.nrf_scanner_description), "other/nrf_scanner", OtherSections.BLUETOOTH),
-        FunctionDestination(Icons.Default.Chat, "Dolphy Chat", stringResource(R.string.other_dolphy_chat_desc), "other/dolphy_chat_global", OtherSections.BLUETOOTH),
-        FunctionDestination(Icons.Default.Keyboard, stringResource(R.string.other_hid), stringResource(R.string.other_hid_desc), "hid", OtherSections.BLUETOOTH),
-        FunctionDestination(Icons.Default.BluetoothDisabled, "Bluetooth Jammer", "L2CAP flood attack", "other/bluetooth_jammer", OtherSections.BLUETOOTH),
-    ) + plugins(OtherSections.BLUETOOTH)
-    sections += OtherSections.OTHER to listOf(
-        FunctionDestination(Icons.Outlined.Nfc, stringResource(R.string.other_nfc), stringResource(R.string.other_nfc_desc), "other/nfc_tools", OtherSections.OTHER),
-        FunctionDestination(Icons.Default.Terminal, stringResource(R.string.other_bad_usb), stringResource(R.string.other_bad_usb_desc), "other/bad_usb", OtherSections.OTHER, requiresRoot = true),
-        FunctionDestination(Icons.Default.QrCodeScanner, stringResource(R.string.other_qr_tools), stringResource(R.string.other_qr_tools_desc), "other/qr_tools", OtherSections.OTHER),
-        FunctionDestination(Icons.Filled.WifiOff, "WI-FI Attacks", stringResource(R.string.network_hub_card_description), "other/network_diagnostic_hub", OtherSections.OTHER),
-        FunctionDestination(Icons.Default.Cast, stringResource(R.string.smarttv_cast_title), stringResource(R.string.smarttv_cast_card_description), "other/smarttv_cast", OtherSections.OTHER),
-        FunctionDestination(Icons.Default.Router, stringResource(R.string.lan_tools_title), stringResource(R.string.lan_tools_subtitle), "other/lan_scanner", OtherSections.OTHER),
-    ) + plugins(OtherSections.OTHER)
+        val sections = mutableListOf<Pair<String, List<FunctionDestination>>>()
+        sections += OtherSections.INFRARED to listOf(
+            FunctionDestination(Icons.Default.Computer, irFlipperTitle, irFlipperDesc, "other/ir_flipper_home", OtherSections.INFRARED),
+            FunctionDestination(Icons.Default.Warning, irStormTitle, irStormDesc, "other/ir_storm", OtherSections.INFRARED),
+            FunctionDestination(Icons.Default.WifiTethering, irJammerTitle, irJammerDesc, "other/ir_jammer", OtherSections.INFRARED),
+            FunctionDestination(Icons.Default.Tv, irUnivTitle, irUnivDesc, "other/universal_remotes_home", OtherSections.INFRARED),
+        ) + plugins(OtherSections.INFRARED)
+        sections += OtherSections.BLUETOOTH to listOf(
+            FunctionDestination(Icons.Default.Bolt, "BLE Spam", "Спам запросами сопряжения Apple, Android, Windows, Samsung", "ble_spam_screen", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.Link, "Bond Spam", "Запрос сопряжения Bluetooth Classic (Bond flood)", "bond_spam_screen", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.BluetoothAudio, audioScanTitle, audioScanDesc, "other/audio_scanner", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.ElectricScooter, scooterTitle, scooterDesc, "other/scooter_hack", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.Bluetooth, "NRF Scanner", nrfDesc, "other/nrf_scanner", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.Chat, "Dolphy Chat", chatDesc, "other/dolphy_chat_global", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.Keyboard, hidTitle, hidDesc, "hid", OtherSections.BLUETOOTH),
+            FunctionDestination(Icons.Default.BluetoothDisabled, "Bluetooth Jammer", "L2CAP flood attack", "other/bluetooth_jammer", OtherSections.BLUETOOTH),
+        ) + plugins(OtherSections.BLUETOOTH)
+        sections += OtherSections.OTHER to listOf(
+            FunctionDestination(Icons.Outlined.Nfc, nfcTitle, nfcDesc, "other/nfc_tools", OtherSections.OTHER),
+            FunctionDestination(Icons.Default.QrCodeScanner, qrTitle, qrDesc, "other/qr_tools", OtherSections.OTHER),
+            FunctionDestination(Icons.Filled.WifiOff, "WI-FI Attacks", netHubDesc, "other/network_diagnostic_hub", OtherSections.OTHER),
+            FunctionDestination(Icons.Default.Cast, tvCastTitle, tvCastDesc, "other/smarttv_cast", OtherSections.OTHER),
+            FunctionDestination(Icons.Default.Router, lanTitle, lanDesc, "other/lan_scanner", OtherSections.OTHER),
+        ) + plugins(OtherSections.OTHER)
 
-    val pluginSection = plugins(OtherSections.PLUGINS)
-    if (pluginSection.isNotEmpty()) sections += OtherSections.PLUGINS to pluginSection
-    bySection.keys.filter { !OtherSections.isBuiltin(it) }.sorted().forEach { section ->
-        sections += section to plugins(section)
+        val pluginSection = plugins(OtherSections.PLUGINS)
+        if (pluginSection.isNotEmpty()) sections += OtherSections.PLUGINS to pluginSection
+        bySection.keys.filter { !OtherSections.isBuiltin(it) }.sorted().forEach { section ->
+            sections += section to plugins(section)
+        }
+        sections.filter { it.second.isNotEmpty() }
     }
-    return sections.filter { it.second.isNotEmpty() }
 }
 
 fun openFunctionDestination(destination: FunctionDestination, navController: NavController, context: android.content.Context) {

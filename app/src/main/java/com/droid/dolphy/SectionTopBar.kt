@@ -14,6 +14,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @OptIn(ExperimentalMaterial3Api::class)
 internal val LocalSectionTopBarScrollBehavior = staticCompositionLocalOf<TopAppBarScrollBehavior?> { null }
@@ -34,17 +35,20 @@ fun SectionTopBar(
     val titleContent: @Composable () -> Unit = {
         Text(
             text = title,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold
+            ),
             maxLines = 1,
             textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         )
     }
     val navigationContent: @Composable () -> Unit = {
         if (onBack != null) {
             FilledTonalIconButton(
                 onClick = onBack,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(36.dp),
                 colors = IconButtonDefaults.filledTonalIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -53,6 +57,7 @@ fun SectionTopBar(
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = stringResource(R.string.cd_back),
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
@@ -64,21 +69,12 @@ fun SectionTopBar(
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    if (alwaysCollapsed) {
-        CenterAlignedTopAppBar(
-            title = titleContent,
-            navigationIcon = navigationContent,
-            actions = actions,
-            colors = colors,
-        )
-        return
-    }
-    LargeTopAppBar(
+    CenterAlignedTopAppBar(
         title = titleContent,
         navigationIcon = navigationContent,
         actions = actions,
         colors = colors,
-        scrollBehavior = scrollBehavior,
+        scrollBehavior = null,
     )
 }
 

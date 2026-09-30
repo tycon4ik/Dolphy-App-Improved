@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun NavigationCustomizationSections(viewModel: SpamViewModel) {
     val fabRoute by viewModel.fabDestinationRoute.collectAsState()
+    val fabEnabled by viewModel.fabEnabled.collectAsState()
     val sections = functionDestinationSections()
     val destinations = sections.flatMap { it.second }
     val selectedFab = destinations.firstOrNull { it.route == fabRoute }
@@ -23,14 +24,32 @@ fun NavigationCustomizationSections(viewModel: SpamViewModel) {
 
     Column(verticalArrangement = Arrangement.spacedBy(M3SegmentedListItemSpacing)) {
         M3SegmentedListSectionHeader(title = stringResource(R.string.settings_bottom_panel).uppercase())
+        val count = if (fabEnabled) 2 else 1
         M3SegmentedListItem(
             index = 0,
-            count = 1,
-            headline = "FAB",
-            supporting = selectedFab?.title ?: stringResource(R.string.nav_modules),
-            leadingIcon = selectedFab?.icon ?: Icons.Default.Extension,
-            onClick = { showFabSheet = true },
+            count = count,
+            headline = "Кнопка FAB",
+            supporting = if (fabEnabled) "Отображается на панели" else "Скрыта, панель по центру",
+            leadingIcon = Icons.Default.RadioButtonChecked,
+            showChevron = false,
+            trailingContent = {
+                DolphySwitch(
+                    checked = fabEnabled,
+                    onCheckedChange = { viewModel.setFabEnabled(it) },
+                )
+            },
+            onClick = { viewModel.setFabEnabled(!fabEnabled) },
         )
+        if (fabEnabled) {
+            M3SegmentedListItem(
+                index = 1,
+                count = count,
+                headline = "Действие FAB",
+                supporting = selectedFab?.title ?: stringResource(R.string.nav_modules),
+                leadingIcon = selectedFab?.icon ?: Icons.Default.Extension,
+                onClick = { showFabSheet = true },
+            )
+        }
     }
 
     if (showFabSheet) {

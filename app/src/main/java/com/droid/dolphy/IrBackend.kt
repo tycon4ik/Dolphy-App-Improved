@@ -11,6 +11,7 @@ object IrBackend {
     private const val SERVICE_ID = "infrared.transmitter"
 
     fun isAvailable(context: Context): Boolean {
+        if (UsbIrManager.isConnected.value) return true
         val pluginAvailable = PluginManager.invokeServices(SERVICE_ID, "available")
             .any { truthy(it.valueJson) }
         if (pluginAvailable) return true
@@ -34,6 +35,16 @@ object IrBackend {
             val success = decision.resultJson?.let(::truthy) ?: true
             if (success) trackIrSend(context)
             return success
+        }
+        if (UsbIrManager.isConnected.value) {
+            val frequency = payload.optInt("frequency", button.frequency)
+            val array = payload.optJSONArray("pattern")
+            val pattern = if (array == null) button.pattern else IntArray(array.length()) { array.optInt(it) }
+            val ok = UsbIrManager.transmit(frequency, pattern)
+            if (ok) {
+                trackIrSend(context)
+                return true
+            }
         }
         PluginManager.invokeServices(SERVICE_ID, "transmit", payload.toString()).forEach { response ->
             val result = parseServiceResult(response.valueJson)
