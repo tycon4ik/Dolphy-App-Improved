@@ -1,5 +1,17 @@
 package com.droid.dolphy.plugin.ui
 
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.IconButton
+import com.droid.dolphy.plugin.PluginRegistryStore
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Add
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -60,6 +72,14 @@ import com.droid.dolphy.plugin.model.LoadedPlugin
 fun PluginManagerScreen(navController: NavController) {
     val plugins by PluginManager.plugins.collectAsState()
     val safeMode by PluginManager.safeMode.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var showAddDialog by remember { mutableStateOf(false) }
+    var newRegistryUrl by remember { mutableStateOf("") }
+    var registries by remember { mutableStateOf(PluginRegistryStore.list(context)) }
+    val navEntry by navController.currentBackStackEntryAsState()
+    LaunchedEffect(navEntry) {
+        registries = PluginRegistryStore.list(context)
+    }
 
     MaterialBackground(accentColor = MaterialTheme.colorScheme.primary) {
         Column(Modifier.fillMaxSize()) {
@@ -69,6 +89,12 @@ fun PluginManagerScreen(navController: NavController) {
                 accentColor = MaterialTheme.colorScheme.primary,
                 alwaysCollapsed = true,
                 actions = {
+                    DolphyIconButton(onClick = { navController.navigate("plugin_catalog") }) {
+                        Icon(Icons.Default.List, "Каталог плагинов")
+                    }
+                    DolphyIconButton(onClick = { showAddDialog = true; newRegistryUrl = "" }) {
+                        Icon(Icons.Default.Add, "Добавить источник")
+                    }
                     DolphyIconButton(onClick = { navController.navigate("plugin_security") }) {
                         Icon(Icons.Default.Settings, stringResource(R.string.plugin_settings_title))
                     }
@@ -82,6 +108,82 @@ fun PluginManagerScreen(navController: NavController) {
                 ) {
                     item("safe_mode") {
                         SafeModeAnimated(safeMode)
+                    }
+                    item("registries_section") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                        ) {
+                            Column(Modifier.padding(14.dp)) {
+                                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.List,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "Источники",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        registries.size.toString(),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                if (registries.isEmpty()) {
+                                    Text(
+                                        "Источники не добавлены",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    registries.forEach { reg ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                reg,
+                                                modifier = Modifier.weight(1f),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 2
+                                            )
+                                            IconButton(
+                                                onClick = {
+                                                    PluginRegistryStore.remove(context, reg)
+                                                    registries = PluginRegistryStore.list(context)
+                                                },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Delete,
+                                                    contentDescription = "Удалить",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                androidx.compose.material3.TextButton(
+                                    onClick = { showAddDialog = true; newRegistryUrl = "" },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Добавить источник")
+                                }
+                            }
+                        }
                     }
                     items(plugins, key = { it.manifest.id }) { plugin ->
                         PluginCard(plugin, safeMode)
@@ -107,6 +209,44 @@ fun PluginManagerScreen(navController: NavController) {
                 }
             }
         }
+    }
+
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("Добавить источник") },
+            text = {
+                Column {
+                    Text("Введите URL страницы или репозитория с .dolphyplugin файлами:", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newRegistryUrl,
+                        onValueChange = { newRegistryUrl = it },
+                        label = { Text("URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val url = newRegistryUrl.trim()
+                    if (url.isNotBlank()) {
+                        val added = PluginRegistryStore.add(context, url)
+                        android.widget.Toast.makeText(
+                            context,
+                            if (added) "Реестр добавлен" else "Уже есть или пустой",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        registries = PluginRegistryStore.list(context)
+                    }
+                    showAddDialog = false
+                }) { Text("Добавить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) { Text("Отмена") }
+            }
+        )
     }
 }
 

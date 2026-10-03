@@ -111,6 +111,7 @@ import com.droid.dolphy.plugin.ui.PluginSafeModeSheet
 import com.droid.dolphy.plugin.PluginBleModeRegistry
 import com.droid.dolphy.plugin.ui.PluginSettingsSections
 import com.droid.dolphy.plugin.PluginManager
+import com.droid.dolphy.plugin.ui.PluginCatalogScreen
 import com.droid.dolphy.plugin.PluginBluetoothHooks
 import com.droid.dolphy.plugin.PluginRuntimeAccess
 import com.droid.dolphy.printer.WifiPrintScreen
@@ -227,6 +228,7 @@ fun DolphyTheme(
     uiScale: Float = 1f,
     animatedBackgroundEnabled: Boolean = false,
     expressiveEnabled: Boolean = false,
+    oledMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
@@ -254,8 +256,23 @@ fun DolphyTheme(
         LocalAnimatedBackgroundEnabled provides animatedBackgroundEnabled,
         LocalDensity provides scaledDensity,
     ) {
+        val finalColorScheme = if (oledMode && darkTheme) {
+            expressiveScheme.copy(
+                background = Color.Black,
+                surface = Color.Black,
+                surfaceVariant = Color(0xFF0A0A0A),
+                surfaceContainer = Color(0xFF050505),
+                surfaceContainerHigh = Color(0xFF0A0A0A),
+                surfaceContainerHighest = Color(0xFF101010),
+                surfaceContainerLow = Color(0xFF020202),
+                surfaceContainerLowest = Color.Black,
+                surfaceDim = Color.Black,
+                surfaceBright = Color(0xFF1A1A1A),
+            )
+        } else expressiveScheme
+
         MaterialExpressiveTheme(
-            colorScheme = expressiveScheme,
+            colorScheme = finalColorScheme,
             typography = typography,
             motionScheme = MotionScheme.expressive(),
             content = content
@@ -590,6 +607,7 @@ class MainActivity : ComponentActivity() {
             val expressiveEnabled by spamViewModel.expressiveEnabled.collectAsState()
             val uiScale by spamViewModel.uiScale.collectAsState()
             val performanceModeEnabled by spamViewModel.performanceModeEnabled.collectAsState()
+            val oledMode by spamViewModel.oledMode.collectAsState()
 
             DolphyTheme(
                 darkTheme = isDarkTheme,
@@ -599,7 +617,8 @@ class MainActivity : ComponentActivity() {
                 flipperFontScale = flipperFontScale,
                 uiScale = uiScale,
                 animatedBackgroundEnabled = animatedBackgroundEnabled && !performanceModeEnabled,
-                expressiveEnabled = expressiveEnabled && !performanceModeEnabled
+                expressiveEnabled = expressiveEnabled && !performanceModeEnabled,
+                oledMode = oledMode
             ) {
                 val backgroundColor = MaterialTheme.colorScheme.background
 
@@ -856,6 +875,8 @@ fun MainScaffold(
         "other/ir_jammer",
         "plugin_manager",
         "other/plugin_manager",
+        "plugin_catalog",
+        "other/plugin_catalog",
         "plugin_security",
         "other/plugin_security",
         "plugin_about",
@@ -964,7 +985,7 @@ fun MainScaffold(
             }
             composable(
                 "settings"
-            ) { SettingsScreen(spamViewModel, dolphyViewModel, screenNavController) }
+            ) { SettingsScreen(spamViewModel, dolphyViewModel, nfcViewModel, screenNavController) }
             composable(
                 "other"
             ) { OtherScreen(screenNavController, spamViewModel) }
@@ -1269,6 +1290,7 @@ fun MainScaffold(
                 )
             }
 
+            composable("plugin_catalog") { PluginCatalogScreen(screenNavController) }
             composable("plugin_manager") {
                 PluginManagerScreen(navController = screenNavController)
             }
@@ -1776,13 +1798,7 @@ fun BluetoothContainerScreen(viewModel: SpamViewModel, navController: NavControl
     val bluetoothAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     val isBluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
 
-    LaunchedEffect(isBluetoothEnabled) {
-        if (!isBluetoothEnabled) {
-            try {
-                btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            } catch (_: Exception) {}
-        }
-    }
+
 
     val accentColor = MaterialTheme.colorScheme.primary
 
@@ -2388,6 +2404,8 @@ internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
             if (dolphyState.level >= 50 || pinnedAnimRoot == "dolphin/watchdogs") {
                 list.addAll(loadExternalAnimationMeta(context, "dolphin/watchdogs"))
             }
+            // Кастомные анимации из filesDir/custom_animations
+            list.addAll(loadCustomAnimationMeta(context))
             list
         }
     }
@@ -2400,7 +2418,7 @@ internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
             if (pinned != null) return@remember pinned
         }
 
-        val pool = if (dolphyState.level >= 50) {
+        val pool = if (dolphyState.level >= 1) {
             animations
         } else {
             animations.filter { !it.isWatchDogs }
@@ -2476,18 +2494,28 @@ internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
 
     val frameBitmap = decodedFrames.getOrNull(frameIndex)
 
+    val prefsForTap = androidx.compose.ui.platform.LocalContext.current
+        .getSharedPreferences("DolphyPrefs", android.content.Context.MODE_PRIVATE)
     Box(
         modifier = modifier
             .offset(y = (-6).dp)
             .clip(RoundedCornerShape(20.dp))
-            .then(
-                if (pinnedAnimName.isNullOrBlank()) {
-                    Modifier.clickable { randomSeed++ }
-                } else Modifier
-            ),
+            .clickable {
+                // Если выбрана pinned-анимация — сбрасываем и переключаем
+                if (!pinnedAnimName.isNullOrBlank()) {
+                    prefsForTap.edit()
+                        .remove("pinned_dolphin_animation_name")
+                        .remove("pinned_dolphin_animation_root")
+                        .apply()
+                    pinnedAnimName = null
+                    sessionExternalDolphinAnimationName = null
+                }
+                randomSeed++
+            },
         contentAlignment = Alignment.Center
     ) {
         if (frameBitmap != null) {
+            val isCustomFrame = currentFrames.getOrNull(frameIndex)?.startsWith("/") == true
             Image(
                 bitmap = frameBitmap,
                 contentDescription = "Random dolphin animation",
@@ -2495,10 +2523,7 @@ internal fun RandomExternalDolphinAnimation(modifier: Modifier = Modifier) {
                     .fillMaxWidth()
                     .aspectRatio(2f),
                 contentScale = ContentScale.Fit,
-                colorFilter = ColorFilter.tint(
-                    color = accent.copy(alpha = 0.58f),
-                    blendMode = BlendMode.Modulate
-                )
+                colorFilter = smartAnimationColorFilter(accent, isCustomFrame, alpha = 0.58f)
             )
         }
     }
@@ -2948,7 +2973,7 @@ fun PluginSystemWarningDialog(onConfirm: () -> Unit) {
 }
 
 @Composable
-fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewModel, navController: NavController) {
+fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewModel, nfcViewModel: com.droid.dolphy.nfc.NfcViewModel, navController: NavController) {
     val bottomScrollPadding = 180.dp
     val isDarkTheme by spamViewModel.isDarkTheme.collectAsState()
     val accentColor = MaterialTheme.colorScheme.primary
@@ -2956,6 +2981,8 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
     val flipperFontEnabled by spamViewModel.flipperFontEnabled.collectAsState()
     val uiScale by spamViewModel.uiScale.collectAsState()
     val cyclicDolphinAnimationEnabled by spamViewModel.cyclicDolphinAnimationEnabled.collectAsState()
+    val nfcAutoReadEnabled by nfcViewModel.nfcAutoReadEnabled.collectAsState()
+    val oledMode by spamViewModel.oledMode.collectAsState()
     val dolphyState by dolphyViewModel.dolphyState.collectAsState()
     val context = LocalContext.current
     var showAuthDialog by remember { mutableStateOf(false) }
@@ -3157,7 +3184,7 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                     val functionsMenuViewType by spamViewModel.functionsMenuViewType.collectAsState()
                     val functionsTileSize by spamViewModel.functionsTileSize.collectAsState()
                     val appStyleMode by spamViewModel.appStyleMode.collectAsState()
-                    val interfaceItems = 5 + 1 + 1 + (if (functionsMenuViewType == 1) 1 else 0) + (if (liquidGlassEnabled) 1 else 0)
+                    val interfaceItems = 5 + 1 + 1 + 1 + 1 + (if (functionsMenuViewType == 1) 1 else 0) + (if (liquidGlassEnabled) 1 else 0)
 
                     MaterialCard(
                         modifier = Modifier.fillMaxWidth(),
@@ -3612,6 +3639,75 @@ fun SettingsScreen(spamViewModel: SpamViewModel, dolphyViewModel: DolphyViewMode
                         }
                     }
                     }
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(interfaceItems - 2, interfaceItems),
+                        contentPadding = 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Nfc,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Авто-чтение NFC",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    "Выключите, если в чехле карта — не будет читаться автоматически",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            DolphySwitch(
+                                checked = nfcAutoReadEnabled,
+                                onCheckedChange = { nfcViewModel.setNfcAutoReadEnabled(it) }
+                            )
+                        }
+                    }
+                    MaterialCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        accentColor = accentColor,
+                        shape = getSegmentedShape(interfaceItems - 1, interfaceItems),
+                        contentPadding = 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp).fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DarkMode,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "OLED-фон",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    "Чисто чёрный фон для AMOLED — экономит батарею",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            DolphySwitch(
+                                checked = oledMode,
+                                onCheckedChange = { spamViewModel.setOledMode(it) }
+                            )
+                        }
+                    }
+
                 }
             }
 
@@ -4899,7 +4995,7 @@ fun DolphyScreen(viewModel: DolphyViewModel, navController: NavController? = nul
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (dolphyState.level >= 50) {
+                            if (dolphyState.level >= 1) {  // понижено с 50 для теста
                                 DolphyIconButton(
                                     onClick = { navController?.navigate("customize_animations") },
                                     liquidTint = accentColor,
@@ -5786,6 +5882,13 @@ class SpamViewModel(private val application: Application) : AndroidViewModel(app
         }
     )
     val isDarkTheme: StateFlow<Boolean> = _isDarkTheme
+
+    private val _oledMode = MutableStateFlow(prefs.getBoolean("oled_mode", false))
+    val oledMode: StateFlow<Boolean> = _oledMode
+    fun setOledMode(enabled: Boolean) {
+        _oledMode.value = enabled
+        prefs.edit { putBoolean("oled_mode", enabled) }
+    }
 
     private val _isCustomBackgroundEnabled = MutableStateFlow(prefs.getBoolean("custom_bg_enabled", false))
     val isCustomBackgroundEnabled: StateFlow<Boolean> = _isCustomBackgroundEnabled

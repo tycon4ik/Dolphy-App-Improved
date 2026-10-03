@@ -3,17 +3,24 @@ package com.droid.dolphy
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
+import com.droid.dolphy.util.GifDecoder
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -80,8 +87,15 @@ object DolphinAnimationCache {
     fun getOrDecodeFrame(context: Context, framePath: String): ImageBitmap? {
         frameCache[framePath]?.let { return it }
         return runCatching {
-            context.assets.open(framePath).use { stream ->
-                BitmapFactory.decodeStream(stream)?.asImageBitmap()?.also {
+            // Если путь абсолютный (/data/data/...) — читаем из filesDir (кастомная анимация).
+            // Иначе — из assets (встроенная анимация).
+            val stream = if (framePath.startsWith("/")) {
+                java.io.File(framePath).inputStream()
+            } else {
+                context.assets.open(framePath)
+            }
+            stream.use { input ->
+                BitmapFactory.decodeStream(input)?.asImageBitmap()?.also {
                     frameCache[framePath] = it
                 }
             }
@@ -180,6 +194,27 @@ suspend fun loadExternalAnimationMeta(
     }
 }
 
+fun smartAnimationColorFilter(accent: Color, isCustom: Boolean, alpha: Float = 0.58f): ColorFilter {
+    // Для кастомных (цветных GIF) приглушаем яркость, чтобы не были светлее стандартных
+    val effectiveAlpha = if (isCustom) alpha * 0.72f else alpha
+    if (!isCustom) {
+        return ColorFilter.tint(
+            color = accent.copy(alpha = effectiveAlpha),
+            blendMode = BlendMode.Modulate
+        )
+    }
+    val r = accent.red * effectiveAlpha
+    val g = accent.green * effectiveAlpha
+    val b = accent.blue * effectiveAlpha
+    val matrix = floatArrayOf(
+        (0.2126f * r), (0.7152f * r), (0.0722f * r), 0f, 0f,
+        (0.2126f * g), (0.7152f * g), (0.0722f * g), 0f, 0f,
+        (0.2126f * b), (0.7152f * b), (0.0722f * b), 0f, 0f,
+        0f, 0f, 0f, 1f, 0f
+    )
+    return ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(matrix))
+}
+
 @Composable
 fun DolphinAnimationPreview(
     meta: ExternalAnimationMeta,
@@ -218,6 +253,7 @@ fun DolphinAnimationPreview(
         contentAlignment = Alignment.Center
     ) {
         if (bitmap != null) {
+            val isCustom = currentFramePath?.startsWith("/") == true
             Image(
                 bitmap = bitmap,
                 contentDescription = meta.name,
@@ -225,15 +261,13 @@ fun DolphinAnimationPreview(
                     .fillMaxWidth()
                     .aspectRatio(2f),
                 contentScale = ContentScale.Fit,
-                colorFilter = ColorFilter.tint(
-                    color = accent.copy(alpha = 0.85f),
-                    blendMode = BlendMode.Modulate
-                )
+                colorFilter = smartAnimationColorFilter(accent, isCustom, alpha = 0.85f)
             )
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun CustomizeAnimationsScreen(
     onBack: () -> Unit,
@@ -248,18 +282,61 @@ fun CustomizeAnimationsScreen(
         mutableStateOf(prefs.getString("pinned_dolphin_animation_name", null))
     }
 
+    var reloadTrigger by remember { mutableIntStateOf(0) }
+
     val allAnimations by androidx.compose.runtime.produceState(
         initialValue = emptyList<ExternalAnimationMeta>(),
-        key1 = Unit
+        key1 = reloadTrigger
     ) {
         value = withContext(Dispatchers.IO) {
             val external = loadExternalAnimationMeta(context, "dolphin/external")
             val watchdogs = loadExternalAnimationMeta(context, "dolphin/watchdogs")
-            external + watchdogs
+            val custom = loadCustomAnimationMeta(context)
+            external + custom + watchdogs
+        }
+    }
+
+    val coroutineScope = rememberCoroutineScope()
+    val gifPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                importGifToCustomAnimations(context, uri) { success, message ->
+                    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+                    if (success) reloadTrigger++
+                }
+            }
         }
     }
 
     var selectedAnimForDialog by remember { mutableStateOf<ExternalAnimationMeta?>(null) }
+    var animToDelete by remember { mutableStateOf<ExternalAnimationMeta?>(null) }
+    
+    if (animToDelete != null) {
+        val toDelete = animToDelete!!
+        AlertDialog(
+            onDismissRequest = { animToDelete = null },
+            title = { Text("Удалить анимацию?") },
+            text = { Text(toDelete.name) },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        val dir = File(context.filesDir, "custom_animations/" + toDelete.name)
+                        if (dir.exists()) dir.deleteRecursively()
+                        animToDelete = null
+                        reloadTrigger++
+                        android.widget.Toast.makeText(context, "Удалено", android.widget.Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(context, "Ошибка: " + (e.message ?: "unknown"), android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Удалить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { animToDelete = null }) { Text("Отмена") }
+            }
+        )
+    }
 
     if (selectedAnimForDialog != null) {
         val anim = selectedAnimForDialog!!
@@ -349,6 +426,15 @@ fun CustomizeAnimationsScreen(
                     title = stringResource(R.string.customize_animations_title),
                     onBack = onBack,
                     actions = {
+                        androidx.compose.material3.IconButton(
+                            onClick = { gifPicker.launch("image/gif") }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = "Import GIF",
+                                tint = accentColor
+                            )
+                        }
                         TextButton(
                             onClick = {
                                 prefs.edit()
@@ -396,7 +482,14 @@ fun CustomizeAnimationsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(16.dp))
-                                    .clickable { selectedAnimForDialog = anim },
+                                    .combinedClickable(
+                                        onClick = { selectedAnimForDialog = anim },
+                                        onLongClick = {
+                                            if (anim.root == "custom") {
+                                                animToDelete = anim
+                                            }
+                                        }
+                                    ),
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = if (isPinned) {
@@ -498,5 +591,122 @@ fun CustomizeAnimationsScreen(
                 }
             }
         }
+    }
+}
+
+
+suspend fun loadCustomAnimationMeta(context: Context): List<ExternalAnimationMeta> {
+    return withContext(Dispatchers.IO) {
+        val baseDir = File(context.filesDir, "custom_animations")
+        if (!baseDir.exists()) return@withContext emptyList()
+
+        val dirs = baseDir.listFiles()?.filter { it.isDirectory } ?: return@withContext emptyList()
+
+        dirs.mapNotNull { dir ->
+            val frames = dir.listFiles()
+                ?.filter { it.name.startsWith("frame_") && it.name.endsWith(".png") }
+                ?.sortedBy { frameNumberFromName(it.name) }
+                ?.map { it.absolutePath }
+                .orEmpty()
+            if (frames.isEmpty()) return@mapNotNull null
+
+            val metaText = runCatching {
+                File(dir, "meta.txt").readText()
+            }.getOrNull().orEmpty()
+
+            val frameRateRegex = Regex("(?im)^Frame rate:\\s*(\\d+)")
+            val durationRegex = Regex("(?im)^Duration:\\s*(\\d+)")
+            val frameRate = frameRateRegex.find(metaText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 10
+            val duration = durationRegex.find(metaText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 20
+
+            ExternalAnimationMeta(
+                name = dir.name,
+                root = "custom",
+                minButthurt = 0,
+                maxButthurt = 18,
+                minLevel = 1,
+                maxLevel = 999,
+                weight = 1,
+                frameRate = frameRate,
+                durationSec = duration,
+                frames = frames,
+            )
+        }
+    }
+}
+
+suspend fun importGifToCustomAnimations(
+    context: Context,
+    uri: android.net.Uri,
+    onResult: (Boolean, String) -> Unit,
+) {
+    try {
+        val input = context.contentResolver.openInputStream(uri)
+        if (input == null) {
+            onResult(false, "Не удалось открыть файл")
+            return
+        }
+
+        val decoder = GifDecoder()
+        val code = withContext(Dispatchers.IO) { decoder.read(input) }
+        input.close()
+
+        if (code != 0 || decoder.frameCount == 0) {
+            onResult(false, "Ошибка декодирования GIF")
+            return
+        }
+
+        val name = "gif_" + System.currentTimeMillis()
+        val dir = File(context.filesDir, "custom_animations/" + name)
+        if (!dir.exists() && !dir.mkdirs()) {
+            onResult(false, "Не удалось создать папку")
+            return
+        }
+
+        withContext(Dispatchers.IO) {
+            for (i in 0 until decoder.frameCount) {
+                val bmp = decoder.getFrame(i) ?: continue
+                // Вариант A: перекрашиваем кадр в белый на прозрачном фоне.
+                // Тогда ColorFilter.tint(accent, Modulate) даст правильный accent-цвет,
+                // как у стандартных анимаций.
+                val bw = android.graphics.Bitmap.createBitmap(
+                    bmp.width, bmp.height,
+                    android.graphics.Bitmap.Config.ARGB_8888
+                )
+                val pixels = IntArray(bmp.width * bmp.height)
+                bmp.getPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                for (j in pixels.indices) {
+                    val px = pixels[j]
+                    val a = (px ushr 24) and 0xFF
+                    val r = (px ushr 16) and 0xFF
+                    val g = (px ushr 8) and 0xFF
+                    val b = px and 0xFF
+                    val lum = (0.299f * r + 0.587f * g + 0.114f * b).toInt()
+                    pixels[j] = if (lum > 96 && a > 32) {
+                        0xFFFFFFFF.toInt()  // белый
+                    } else {
+                        0x00000000           // прозрачный
+                    }
+                }
+                bw.setPixels(pixels, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                val file = File(dir, "frame_" + i + ".png")
+                file.outputStream().use { out ->
+                    bw.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                }
+                bw.recycle()
+            }
+
+            var totalDelay = 0
+            for (i in 0 until decoder.frameCount) totalDelay += decoder.getDelay(i)
+            val avgDelay = if (decoder.frameCount > 0) totalDelay / decoder.frameCount else 100
+            val frameRate = if (avgDelay > 0) (1000 / avgDelay).coerceIn(1, 30) else 10
+
+            val meta = "Frame rate: " + frameRate + "\\nDuration: 3600\\n"
+            File(dir, "meta.txt").writeText(meta)
+        }
+
+        onResult(true, "Загружено " + decoder.frameCount + " кадров")
+    } catch (e: Exception) {
+        onResult(false, "Ошибка: " + (e.message ?: "unknown"))
     }
 }

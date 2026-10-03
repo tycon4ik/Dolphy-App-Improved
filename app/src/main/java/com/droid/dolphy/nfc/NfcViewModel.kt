@@ -39,6 +39,13 @@ sealed class NfcWriteOutcome {
 }
 
 class NfcViewModel(private val app: Application) : AndroidViewModel(app) {
+    private val prefs = app.getSharedPreferences("DolphyPrefs", android.content.Context.MODE_PRIVATE)
+    private val _nfcAutoReadEnabled = MutableStateFlow(prefs.getBoolean("nfc_auto_read_enabled", true))
+    val nfcAutoReadEnabled: StateFlow<Boolean> = _nfcAutoReadEnabled
+    fun setNfcAutoReadEnabled(enabled: Boolean) {
+        _nfcAutoReadEnabled.value = enabled
+        prefs.edit().putBoolean("nfc_auto_read_enabled", enabled).apply()
+    }
     private val dao = NfcDatabase.get(app).scans()
 
     val history: StateFlow<List<NfcScanEntity>> =
@@ -171,6 +178,7 @@ class NfcViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun handleNfcIntent(intent: Intent) {
+        if (!_nfcAutoReadEnabled.value) return
         extractTag(intent)?.let { tag ->
             try {
                 com.droid.dolphy.plugin.PluginManager.dispatchNfcTag(tag)

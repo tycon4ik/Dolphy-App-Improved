@@ -12,3 +12,6 @@
 .cxx/
 **/app/.cxx/
 /plugin-test-suite/
+.kotlin/
+/gradlew
+gradlew.bat
