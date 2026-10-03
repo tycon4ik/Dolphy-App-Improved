@@ -26,3 +26,7 @@
 This is **not** the original Dolphy. Please **don't report bugs** in this build to the original developers.
 
 unvoiddd cool dude
+
+<p align="center">
+  <img src="demo.gif" width="300" />
+</p>
