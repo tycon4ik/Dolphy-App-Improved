@@ -7,9 +7,9 @@
 ## Screenshots
 
 <p align="center">
+  <img src="Screenshot_20261003_200743_Dolphy.jpg" width="240" />
+  <img src="Screenshot_20261003_200656_Dolphy.jpg" width="240" />
   <img src="Screenshot_20261003_200648_Dolphy.jpg" width="240" />
-  <img src="Screenshot_20261003_2.jpg" width="240" />
-  <img src="Screenshot_20261003_3.jpg" width="240" />
 </p>
 
 **What's new**
